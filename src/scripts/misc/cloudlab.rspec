@@ -1,0 +1,95 @@
+<rspec xmlns="http://www.geni.net/resources/rspec/3" xmlns:emulab="http://www.protogeni.net/resources/rspec/ext/emulab/1" xmlns:tour="http://www.protogeni.net/resources/rspec/ext/apt-tour/1" xmlns:jacks="http://www.protogeni.net/resources/rspec/ext/jacks/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.geni.net/resources/rspec/3    http://www.geni.net/resources/rspec/3/request.xsd" type="request">
+  <node xmlns:jacks="http://www.protogeni.net/resources/rspec/ext/jacks/1" xmlns:emulab="http://www.protogeni.net/resources/rspec/ext/emulab/1" client_id="node_0" exclusive="true" component_manager_id="urn:publicid:IDN+clemson.cloudlab.us+authority+cm" component_id="urn:publicid:IDN+clemson.cloudlab.us+node+clnode086" sliver_id="urn:publicid:IDN+clemson.cloudlab.us+sliver+663538">
+    <sliver_type name="raw-pc">
+      <disk_image name="urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD"/>
+    </sliver_type>
+    <hardware_type name="c8220"/>
+    <emulab:blockstore name="bs_0" mountpoint="/data" class="local" size="100GB" placement="any"/>
+    <emulab:vnode name="clnode086" hardware_type="c8220"/>
+    <host name="node_0.romanh0-219658.maki-cost-models-PG0.clemson.cloudlab.us" ipv4="130.127.133.95"/>
+    <services>
+      <login authentication="ssh-keys" hostname="clnode086.clemson.cloudlab.us" port="22" username="romanh0"/>
+      <emulab:console server="boss.clemson.cloudlab.us"/>
+      <emulab:recovery available="true"/>
+      <emulab:powercycle available="true"/>
+      <emulab:imageable available="true"/>
+    </services>
+  </node>
+  <node xmlns:jacks="http://www.protogeni.net/resources/rspec/ext/jacks/1" xmlns:emulab="http://www.protogeni.net/resources/rspec/ext/emulab/1" client_id="node_1" exclusive="true" component_manager_id="urn:publicid:IDN+clemson.cloudlab.us+authority+cm" component_id="urn:publicid:IDN+clemson.cloudlab.us+node+clnode046" sliver_id="urn:publicid:IDN+clemson.cloudlab.us+sliver+663535">
+    <sliver_type name="raw-pc">
+      <disk_image name="urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD"/>
+    </sliver_type>
+    <hardware_type name="c8220"/>
+    <emulab:blockstore name="bs_1" mountpoint="/data" class="local" size="100GB" placement="any"/>
+    <emulab:vnode name="clnode046" hardware_type="c8220"/>
+    <host name="node_1.romanh0-219658.maki-cost-models-PG0.clemson.cloudlab.us" ipv4="130.127.133.55"/>
+    <services>
+      <login authentication="ssh-keys" hostname="clnode046.clemson.cloudlab.us" port="22" username="romanh0"/>
+      <emulab:console server="boss.clemson.cloudlab.us"/>
+      <emulab:recovery available="true"/>
+      <emulab:powercycle available="true"/>
+      <emulab:imageable available="true"/>
+    </services>
+  </node>
+  <node xmlns:jacks="http://www.protogeni.net/resources/rspec/ext/jacks/1" xmlns:emulab="http://www.protogeni.net/resources/rspec/ext/emulab/1" client_id="node_2" exclusive="true" component_manager_id="urn:publicid:IDN+clemson.cloudlab.us+authority+cm" component_id="urn:publicid:IDN+clemson.cloudlab.us+node+clnode071" sliver_id="urn:publicid:IDN+clemson.cloudlab.us+sliver+663536">
+    <sliver_type name="raw-pc">
+      <disk_image name="urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD"/>
+    </sliver_type>
+    <hardware_type name="c8220"/>
+    <emulab:blockstore name="bs_2" mountpoint="/data" class="local" size="100GB" placement="any"/>
+    <emulab:vnode name="clnode071" hardware_type="c8220"/>
+    <host name="node_2.romanh0-219658.maki-cost-models-PG0.clemson.cloudlab.us" ipv4="130.127.133.80"/>
+    <services>
+      <login authentication="ssh-keys" hostname="clnode071.clemson.cloudlab.us" port="22" username="romanh0"/>
+      <emulab:console server="boss.clemson.cloudlab.us"/>
+      <emulab:recovery available="true"/>
+      <emulab:powercycle available="true"/>
+      <emulab:imageable available="true"/>
+    </services>
+  </node>
+  <node xmlns:jacks="http://www.protogeni.net/resources/rspec/ext/jacks/1" xmlns:emulab="http://www.protogeni.net/resources/rspec/ext/emulab/1" client_id="node_3" exclusive="true" component_manager_id="urn:publicid:IDN+clemson.cloudlab.us+authority+cm" component_id="urn:publicid:IDN+clemson.cloudlab.us+node+clnode070" sliver_id="urn:publicid:IDN+clemson.cloudlab.us+sliver+663534">
+    <sliver_type name="raw-pc">
+      <disk_image name="urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD"/>
+    </sliver_type>
+    <hardware_type name="c8220"/>
+    <emulab:blockstore name="bs_3" mountpoint="/data" class="local" size="100GB" placement="any"/>
+    <emulab:vnode name="clnode070" hardware_type="c8220"/>
+    <host name="node_3.romanh0-219658.maki-cost-models-PG0.clemson.cloudlab.us" ipv4="130.127.133.79"/>
+    <services>
+      <login authentication="ssh-keys" hostname="clnode070.clemson.cloudlab.us" port="22" username="romanh0"/>
+      <emulab:console server="boss.clemson.cloudlab.us"/>
+      <emulab:recovery available="true"/>
+      <emulab:powercycle available="true"/>
+      <emulab:imageable available="true"/>
+    </services>
+  </node>
+  <node xmlns:jacks="http://www.protogeni.net/resources/rspec/ext/jacks/1" xmlns:emulab="http://www.protogeni.net/resources/rspec/ext/emulab/1" client_id="node_4" exclusive="true" component_manager_id="urn:publicid:IDN+clemson.cloudlab.us+authority+cm" component_id="urn:publicid:IDN+clemson.cloudlab.us+node+clnode054" sliver_id="urn:publicid:IDN+clemson.cloudlab.us+sliver+663537">
+    <sliver_type name="raw-pc">
+      <disk_image name="urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD"/>
+    </sliver_type>
+    <hardware_type name="c8220"/>
+    <emulab:blockstore name="bs_4" mountpoint="/data" class="local" size="100GB" placement="any"/>
+    <emulab:vnode name="clnode054" hardware_type="c8220"/>
+    <host name="node_4.romanh0-219658.maki-cost-models-PG0.clemson.cloudlab.us" ipv4="130.127.133.63"/>
+    <services>
+      <login authentication="ssh-keys" hostname="clnode054.clemson.cloudlab.us" port="22" username="romanh0"/>
+      <emulab:console server="boss.clemson.cloudlab.us"/>
+      <emulab:recovery available="true"/>
+      <emulab:powercycle available="true"/>
+      <emulab:imageable available="true"/>
+    </services>
+  </node>
+  <rspec_tour xmlns="http://www.protogeni.net/resources/rspec/ext/apt-tour/1">
+    <description type="markdown">Multiple c8220 nodes used for experiments of learned cost models.</description>
+    <instructions type="markdown">Wait for the profile instance to start, and then log in to the host via the
+ssh port specified below.
+</instructions>
+  </rspec_tour>
+  <data_set xmlns="http://www.protogeni.net/resources/rspec/ext/profile-parameters/1">
+    <data_item name="emulab.net.parameter.X">5</data_item>
+  </data_set>
+  <emulab:portal name="cloudlab" url="https://www.cloudlab.us/status.php?uuid=3ae089ed-7a65-11ef-a601-e4434b2381fc" project="maki-cost-models" experiment="romanh0-219658" sequence="1727176072"/>
+  <rs:site_info xmlns:rs="http://www.protogeni.net/resources/rspec/ext/site-info/1">
+    <rs:location country="US" latitude="34.586496" longitude="-82.821457"/>
+  </rs:site_info>
+</rspec>

@@ -1,0 +1,35 @@
+dgl==1.1.2
+#mysql-connector-python
+networkx
+numpy
+osfclient
+pandas
+psycopg2-binary
+psutil
+sortedcontainers
+scikit-learn==1.4.0
+tabulate
+torch==2.1.2
+tqdm
+func_timeout
+duckdb
+gensim
+# for octopus
+paramiko
+scp
+scipy==1.11.0
+seaborn
+
+# for wandb
+wandb
+
+# for postgres db endpoint
+fastapi
+uvicorn
+
+# zs  cost baseline
+optuna
+
+lightgbm
+attrs
+python-dotenv
