@@ -1,12 +1,21 @@
 # How Good Are Learned Cost Models, Really? Insights from Query Optimization Tasks. 
 
 This repository contains the evaluation **source code** of the SIGMOD Paper:
-"How Good Are Learned Cost Models, Really? Insights from Query Optimization Tasks" from
+"[How Good Are Learned Cost Models, Really? Insights from Query Optimization Tasks](https://dl.acm.org/doi/10.1145/3725309)" from
 Roman Heinrich, Manisha Luthra, Johannes Wehrstein, Harald Kornmayer and Carsten Binnig.
 
-**The training data, trained models and model predictions are available at [OSF](https://osf.io/rb5tn/).**
 
-## Source Code Origins
+## 1. Access to Training and Evaluation Data
+<details>
+  <summary>Click to Expand</summary>
+
+**The training data, trained models and model predictions are available at [OSF](https://osf.io/rb5tn/).**
+</details>
+
+## 2. Source Code Origins
+<details>
+  <summary>Click to Expand</summary>
+
 We thank all authors of the following repositories for providing their code. 
 We modified some parts of the code to fit our evaluation setup, but the core functionality remains the same.
 
@@ -76,20 +85,31 @@ We modified some parts of the code to fit our evaluation setup, but the core fun
     Like in the other models, we adapted the code to work with our datasets and to be more flexible in terms of the input data.
     The impelementation is available at: `src/models/dace/dace_model.py`
 
-## Experimental Setup
+</details>
+
+
+## 3. Experimental Setup
+<details>
+  <summary>Click to Expand</summary>
 In the following, we describe our experimental set-up. For details, please refer to the paper.
+We disinguish between **local** and **remote** operations in the following.
+
+- **Local**: Models are trained and evaluated on the local host, i.e. the machine where the code is executed.
+While useful for debugging and development, this is impractical, as datasets are large and the training of the models is time-consuming.
+- **Remote**: Models are trained and evaluated on remote machines. This includes the execution of training and evaluation queries, which we conducat on Cloudlab machines.
+CLoudlab is a research platform that provides access to a variety of hardware resources for research purposes.
+Moreover, we use a set of training machines that are equipped with GPUs to accelerate the training process.
 
 ### Hardware Instances
 This code distinguishes between different type of machines.
+- **Localhost**: Can be used to train and evaluate models in local mode. In remote mode, it is used as central coordinator to distribute code and evaluate results.
 - **Cloudlab-Instances**: The machines of type [c8220](https://www.clemson.cloudlab.us/portal/show-nodetype.php?type=c8220&_gl=1*1goap78*_ga*MTIyNzE5ODc0My4xNzIxOTIwMTMw*_ga_6W2Y02FJX6*MTcyMzE4MzIwNi42LjEuMTcyMzE4MzIyMy4wLjAuMA..) 
   used in the Cloudlab environment to run training and test queries. These are the target instances, i.e. for these machines and database environments, LCMs are trained.
 - **Training-Instances**: In order to accelerate the training LCMs, we use a set of cluster nodes that especially have GPU support (CUDA).
-- **Localhost**: Used as central coordinator to distribute code and evaluate results.
-
 Moreover, we integrated and recommend [Weights & Biases](https://wandb.ai/site) to monitor the training process and evaluate the results.
 
 ### Environment Variables
-To make the scripts running, the user has to provide the following information by setting the corresponding environment variables:
+To make the scripts running for local and remote operation, the user has to provide the following information by setting the corresponding environment variables:
 - `LOCAL_ROOT_PATH`: The path to the root directory of the repository on the local host.
 - `LOCAL_KNOWN_HOSTS_PATH`: The path to the known_hosts file on the local host.
 - `CLOUDLAB_ROOT_PATH`: The path to the root directory of the repository on the cloudlab machines.
@@ -108,8 +128,61 @@ To make the scripts running, the user has to provide the following information b
 - `OSF_PROJECT`: The project name of the OSF account where the data is stored.
 - `NODE00`: Node Information of the first training machine in the form of: `{'hostname': 'hostname.com', 'python': '3.9'}`.
 - Add more nodes if necessary.
+</details>
 
-## Training & Evaluation Pipeline
+
+## 4. Local Training & Evaluation Pipeline
+<details>
+  <summary>Click to Expand</summary>
+
+To locally train and evaluate the LCMs, we provide a set of scripts that can be executed on the local host.
+Those scripts are similarly executed in the remote mode on the target machines.
+
+```
+python main.py 
+--mode train 
+--wandb_project lcm                   
+--wandb_entity learneddb 
+--model_type zeroshot
+--device cuda:0 
+--model_dir /path/where/to/save/model 
+--target_dir /path/where/to/save/predictions
+--statistics_file /path/to/feature_statistics.json
+--seed 3
+ --wandb_name my_model_training_run
+ --workload_runs /path/to/training/run/imdb_scaled1/workload_200k_s1.json /path/ /path/to/training/run/baseball_scaled1/workload_200k_s1.json  
+ --test_workload_runs /path/to/test/run/imdb_scaled1/join_order_full/job_light_36.json
+ ```
+
+This command trains the LCMs on the local host with the specified parameters.
+It uses the following parameters:
+- `mode`: The mode of the script, i.e. `train` , `retrain` or `predict`.
+- `wandb_project`: The name of the Weights & Biases project to log the training process.
+- `wandb_entity`: The name of the Weights & Biases entity to log the training process.
+- `model_type`: The type of the model to train, i.e. `zeroshot`, `qppnet`, `mscn`, `e2e`, `queryformer`, `dace`.
+- `device`: The device to use for training, i.e. `cuda:0` for GPU or `cpu` for CPU.
+- `model_dir`: The directory where the trained model is saved.
+- `target_dir`: The directory where the predictions are saved.
+- `statistics_file`: The path to the feature statistics file that is used to train the model.
+- `seed`: The random seed to use for training.
+- `wandb_name`: The name of the Weights & Biases run to log the training process.
+- `workload_runs`: The path to the training workload runs that are used to train the model.
+- `test_workload_runs`: The path to the test workload runs that are used to evaluate the model.
+
+## Additional Scripts
+In addition to the main training and evaluation script, we provide a set of additional scripts that can be used to perform specific tasks:
+- `gather_feature_statistics.py`: This script gathers feature statistics from the training workload runs and stores them in a JSON file.
+  It is used to prepare the data for training the LCMs.
+- `parse_all.py`: This script parses the query plans from the training workload runs and stores them in a specific format.
+  It is used to prepare the data for training the LCMs.
+- `run_benchmark.py`: This script is used to run queries that are used for training and evaluatio of the LCMs.
+  It executes the queries on the database and stores the results in a specific format.
+</details>
+
+## 5. Remote Training & Evaluation Pipeline
+<details>
+  <summary>Click to Expand</summary>
+
 The repository contains a set of scripts to automate the evaluation process.
 They are located at `src/scripts/exp_runner` and realize the following tasks:
 - **Setup**: Install all necessary dependencies and download the required data on a set of given cloudlab machines.
@@ -199,7 +272,40 @@ The following command fetches the predictions from the target machines and store
 ```
 python3 exp_predict_all.py --task pickup
 ```
+</details>
 
-### 8. Plot Evaluations
+## 6. Plots
+<details>
+  <summary>Click to Expand</summary>
 The evaluation strategy is described in the paper and the corresponding jupyter notebooks can be found at:
 `/src/evaluation/plots`. The notebooks are used to evaluate the results of the LCMs and compare them to the ground truth.
+</details>
+
+## 7. References
+<details>
+  <summary>Click to Expand</summary>
+You can find the paper in the ACM Digital Library or on arXiv:
+- **Paper (ACM DL): https://dl.acm.org/doi/10.1145/3725309**
+- **Paper (arXiv): https://arxiv.org/abs/2502.01229**
+
+Please cite the paper as follows:
+
+```bibtex
+  @article{10.1145/3725309,
+    author = {Heinrich, Roman and Luthra, Manisha and Wehrstein, Johannes and Kornmayer, Harald and Binnig, Carsten},
+    title = {How Good are Learned Cost Models, Really? Insights from Query Optimization Tasks},
+    year = {2025},
+    issue_date = {June 2025},
+    publisher = {Association for Computing Machinery},
+    address = {New York, NY, USA},
+    volume = {3},
+    number = {3},
+    url = {https://doi.org/10.1145/3725309},
+    doi = {10.1145/3725309},
+    journal = {Proc. ACM Manag. Data},
+    month = jun,
+    articleno = {172},
+    numpages = {27},
+}
+```
+</details>
