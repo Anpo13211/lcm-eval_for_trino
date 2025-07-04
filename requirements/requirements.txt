@@ -3,10 +3,11 @@ psycopg2-binary
 tqdm
 scikit-learn
 numpy
-torch==2.0.1
+torch
 torchvision
 pydantic
 dgl
+dotenv
 osfclient
 paramiko
 scp
@@ -21,7 +22,7 @@ absl-py
 glog
 networkx
 tabulate
-scipy==1.10.1
+scipy
 yapf
 mako
 pyarrow
@@ -32,9 +33,9 @@ joblib
 wandb
 lightning==2.0.9
 loralib==0.1.2
-numpy==1.24.3
 pytorch_lightning==2.0.9
-ray==2.7.0
+ray
 torch_tb_profiler
 tensorflow
-tensorrt
+colorama
+scp
