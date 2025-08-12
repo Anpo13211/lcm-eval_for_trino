@@ -3,10 +3,8 @@ psycopg2-binary
 tqdm
 scikit-learn
 numpy
-torch
 torchvision
 pydantic
-dgl
 dotenv
 osfclient
 paramiko
@@ -34,8 +32,12 @@ wandb
 lightning==2.0.9
 loralib==0.1.2
 pytorch_lightning==2.0.9
+torchdata==0.9.0
+torch==2.3.0
+https://data.dgl.ai/wheels/torch-2.3/cu121/dgl-2.4.0%2Bcu121-cp312-cp312-manylinux1_x86_64.whl
 ray
 torch_tb_profiler
 tensorflow
 colorama
 scp
+sqlparse

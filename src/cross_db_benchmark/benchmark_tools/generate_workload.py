@@ -232,6 +232,7 @@ def generate_workload(dataset, target_path, num_queries=100, max_no_joins=3, max
                       exists_predicate_prob=0.0, max_no_exists=0, outer_groupby_prob=0.0):
     randstate = np.random.RandomState(seed)
 
+    print(f"Generating workload for dataset {dataset} with {num_queries} queries and saving to {target_path}")
     if os.path.exists(target_path) and not force:
         print("Workload already generated")
         return
