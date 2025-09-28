@@ -1,10 +1,12 @@
 import collections
 
+from cross_db_benchmark.benchmark_tools.postgres.plan_operator import PlanOperator
 import dgl
 import numpy as np
 import torch
 from sklearn.preprocessing import RobustScaler
 
+from cross_db_benchmark.benchmark_tools.postgres.parse_filter import PredicateNode
 from cross_db_benchmark.benchmark_tools.generate_workload import Operator
 from training.featurizations import Featurization
 from training.preprocessing.feature_statistics import FeatureType
@@ -28,7 +30,7 @@ def encode(column, plan_params, feature_statistics):
     return enc_value
 
 
-def plan_to_graph(node, database_id, plan_depths, plan_features, plan_to_plan_edges, db_statistics, feature_statistics,
+def plan_to_graph(node: PlanOperator, database_id, plan_depths, plan_features, plan_to_plan_edges, db_statistics, feature_statistics,
                   filter_to_plan_edges, predicate_col_features, output_column_to_plan_edges, output_column_features,
                   column_to_output_column_edges, column_features, table_features, table_to_plan_edges,
                   output_column_idx, column_idx, table_idx, plan_featurization: Featurization, predicate_depths, intra_predicate_edges,
@@ -63,17 +65,44 @@ def plan_to_graph(node, database_id, plan_depths, plan_features, plan_to_plan_ed
     4. 制御用パラメータ
         parent_node_id: 親ノードのID（再帰用）
         depth: 現在の深度（再帰用）
+    
+    実行プラン：
+        Aggregate (depth=0)
+        ├── Hash Join (depth=1)
+        │   ├── Seq Scan (depth=2)
+        │   └── Index Scan (depth=2)
+        └── Sort (depth=1)
+            └── Seq Scan (depth=2)
+    のようなものが多く、depth によって planノードの階層を表現する。
+    この場合：
+    plan0: Aggregate
+    plan1: Hash Join, Sort
+    plan2: Seq Scan, Index Scan, Seq Scan
+    になり、0 ← 1 ← 2 のようにプランの間にエッジが張られる。
     """
     plan_node_id = len(plan_depths)
     plan_depths.append(depth)
 
-    # add plan features
+    # add plan features（plan_params: 辞書）
     plan_params = vars(node.plan_parameters)
-    curr_plan_features = [encode(column, plan_params, feature_statistics) for column in
-                          plan_featurization.PLAN_FEATURES]
+    curr_plan_features = [encode(column, plan_params, feature_statistics) for column in plan_featurization.PLAN_FEATURES]
     plan_features.append(curr_plan_features)
 
     # encode output columns which can in turn have several columns as a product in the aggregation
+    """
+    おそらく output_columns は以下のような形式である。（plan_operator.py の parse_output_columns で生成される）
+    output_columns = [
+    {
+        'aggregation': 'COUNT',  # または 'SUM', 'AVG', 'MIN', 'MAX', None
+        'columns': [('table1', 'column1'), ('table2', 'column2')]  # タプルのリスト
+    },
+    {
+        'aggregation': 'SUM',
+        'columns': [('orders', 'amount')]
+    },
+    # ... 他の出力カラム
+]
+    """
     output_columns = plan_params.get('output_columns')
     if output_columns is not None:
         for output_column in output_columns:
@@ -87,10 +116,11 @@ def plan_to_graph(node, database_id, plan_depths, plan_features, plan_to_plan_ed
 
                 output_column_node_id = len(output_column_features)
                 output_column_features.append(curr_output_column_features)
-                output_column_idx[(output_column.aggregation, tuple(output_column.columns), database_id)] \
-                    = output_column_node_id
+                # 同じ出力カラムでもデータベースが違えば別物として扱うべきなので output_column_idx はこんなに複雑な key を持つ
+                output_column_idx[(output_column.aggregation, tuple(output_column.columns), database_id)] = output_column_node_id
 
                 # featurize product of columns if there are any
+                # column edge と output_column edge を作成する(カラムの統計情報と出力カラムの集約方法の関係を学習する)
                 db_column_features = db_statistics[database_id].column_stats
                 for column in output_column.columns:
                     column_node_id = column_idx.get((column, database_id))
@@ -147,7 +177,7 @@ def plan_to_graph(node, database_id, plan_depths, plan_features, plan_to_plan_ed
                       intra_predicate_edges, logical_preds, parent_node_id=plan_node_id, depth=depth + 1)
 
 
-def parse_predicates(db_column_features, feature_statistics, filter_column, filter_to_plan_edges, plan_featurization,
+def parse_predicates(db_column_features, feature_statistics, filter_column: PredicateNode, filter_to_plan_edges, plan_featurization,
                      predicate_col_features, predicate_depths, intra_predicate_edges, logical_preds, plan_node_id=None,
                      parent_filter_node_id=None, depth=0):
     """
@@ -179,10 +209,13 @@ def parse_predicates(db_column_features, feature_statistics, filter_column, filt
         # encodes the structure of this output column
         else:
             curr_filter_col_feats = [0 for _ in plan_featurization.COLUMN_FEATURES]
+        # カラムの特徴量を追加する(list がそのまま append)
         curr_filter_features += curr_filter_col_feats
         logical_preds.append(False)
 
     else:
+        # AND, OR　などの論理述語の場合
+        # 論理述語などはカラムを持たないからカラム情報を curr_filter_features に追加しない
         curr_filter_features = [encode(feature_name, vars(filter_column), feature_statistics)
                                 for feature_name in plan_featurization.FILTER_FEATURES]
         logical_preds.append(True)
