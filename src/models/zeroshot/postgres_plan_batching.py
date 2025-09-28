@@ -31,8 +31,39 @@ def encode(column, plan_params, feature_statistics):
 def plan_to_graph(node, database_id, plan_depths, plan_features, plan_to_plan_edges, db_statistics, feature_statistics,
                   filter_to_plan_edges, predicate_col_features, output_column_to_plan_edges, output_column_features,
                   column_to_output_column_edges, column_features, table_features, table_to_plan_edges,
-                  output_column_idx, column_idx, table_idx, plan_featurization, predicate_depths, intra_predicate_edges,
+                  output_column_idx, column_idx, table_idx, plan_featurization: Featurization, predicate_depths, intra_predicate_edges,
                   logical_preds, parent_node_id=None, depth=0):
+    """
+    引数一覧：
+    1. 入力データ
+        node: 現在処理中の実行計画ノード
+        database_id: データベースの識別子
+        db_statistics: データベースの統計情報
+        feature_statistics: 特徴量の統計情報
+        plan_featurization: 特徴量化の設定
+    2. 出力用のリスト（参照渡しで更新）
+        plan_depths: 各プランノードの深度
+        plan_features: プランノードの特徴量
+        plan_to_plan_edges: プランノード間のエッジ
+        filter_to_plan_edges: フィルターからプランへのエッジ
+        predicate_col_features: 述語の特徴量
+        output_column_to_plan_edges: 出力カラムからプランへのエッジ
+        output_column_features: 出力カラムの特徴量
+        column_to_output_column_edges: カラムから出力カラムへのエッジ
+        column_features: カラムの特徴量
+        table_features: テーブルの特徴量
+        table_to_plan_edges: テーブルからプランへのエッジ
+        predicate_depths: 述語の深度
+        intra_predicate_edges: 述語内のエッジ
+        logical_preds: 論理述語かどうかのフラグ
+    3. インデックス管理用辞書
+        output_column_idx: 出力カラムのインデックス
+        column_idx: カラムのインデックス
+        table_idx: テーブルのインデックス
+    4. 制御用パラメータ
+        parent_node_id: 親ノードのID（再帰用）
+        depth: 現在の深度（再帰用）
+    """
     plan_node_id = len(plan_depths)
     plan_depths.append(depth)
 
