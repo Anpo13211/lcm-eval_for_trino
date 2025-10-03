@@ -23,6 +23,31 @@ If you find this paper useful, please cite it as follows:
     numpages = {27},
 }
 ```
+# 全体のデータフロー
+1. データ準備
+   ↓
+2. クエリ生成 (generate_workload)
+   ↓
+3. クエリ実行 (run_workload)
+   ├─ EXPLAIN (VERBOSE TRUE, ANALYZE FALSE) → 詳細プラン
+   └─ EXPLAIN (ANALYZE TRUE) × 3回 → 実行時間付きプラン
+   ↓
+4. プラン解析 (parse_plans)
+   ├─ 実行時間の計算・平均化
+   ├─ プランツリーの構築
+   └─ 特徴量の抽出
+   ↓
+5. グラフ変換 (postgres_plan_collator)
+   ├─ 複数クエリの統合
+   ├─ 異種グラフの構築
+   └─ 特徴量の正規化
+   ↓
+6. 機械学習
+   ├─ データローダー作成
+   ├─ モデル訓練
+   └─ 予測・評価
+
+
 
 # Table of Contents
 1. [Overview](#1-overview)  

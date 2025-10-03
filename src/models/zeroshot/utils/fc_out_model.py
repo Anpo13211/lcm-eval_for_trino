@@ -18,6 +18,8 @@ class DynamicLayer(nn.Module):
                  norm_class_kwargs=None, inplace=False, **kwargs):
         super().__init__()
         # initialize base NN
+
+        # inplace: 上書きするかどうか
         self.inplace = inplace
         self.p_dropout = p_dropout
         self.act_class = activations.__dict__[activation_class_name]
@@ -116,6 +118,7 @@ class FcOutModel(DynamicLayer):
         self.input_dim = input_dim
         self.no_input_required = input_dim == 0
 
+        # 入力が何もないときは、常に tensor([output_dim]) という初期値を出力します。（一様分布で初期化）
         if self.input_dim == 0:
             self.replacement_param = Parameter(torch.Tensor(self.output_dim))
             # init.kaiming_uniform_(self.replacement_param, a=math.sqrt(5))
@@ -127,9 +130,18 @@ class FcOutModel(DynamicLayer):
         if loss_class_name is not None:
             self.loss_fxn = losses.__dict__[loss_class_name](self, **loss_class_kwargs)
 
+
+        """
+        input_dim = 128, width_factor = 2, n_layers = 3, output_dim = 1 の場合
+        layer_dims = [128, 256, 256, 256, 1]
+        """
         layer_dims = [self.input_dim] + [int(width_factor * self.input_dim)] * n_layers + [self.output_dim]
 
         layers = []
+        """
+        上記の場合、4層のMLPを作成する
+        Dense(128, 256) -> Dense(256, 256) -> Dense(256, 256) -> Dense(256, 1) （zip 関数）
+        """
         for layer_in, layer_out in zip(layer_dims, layer_dims[1:]):
             if not residual or layer_in != layer_out:
                 layers.append(FcLayer(layer_in, layer_out, **kwargs))

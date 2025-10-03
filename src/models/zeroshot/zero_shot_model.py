@@ -26,6 +26,7 @@ class ZeroShotModel(FcOutModel):
         self.hidden_dim = model_config.hidden_dim
 
         # use different models per edge type
+        # ノードタイプだけでなく、エッジタイプにも異なるモデルを適用する
         tree_model_types = add_tree_model_types + ['to_plan', 'intra_plan', 'intra_pred']
         self.tree_models = nn.ModuleDict({
             node_type: message_aggregators.__dict__[model_config.tree_layer_name](hidden_dim=self.hidden_dim, **model_config.tree_layer_kwargs)

@@ -23,7 +23,9 @@ class MessageAggregator(FcOutModel):
                 assert feat[out_type].shape[0] == rst[out_type].shape[0]
                 # send through fully connected layers
                 if not self.test:
+                    # 横に繋ぐ（バッチサイズを変更しない）
                     out_dict[out_type] = self.fcout(torch.cat([feat[out_type], rst[out_type]], dim=1))
+                
                 # simply add in debug mode for testing
                 else:
                     out_dict[out_type] = feat[out_type] + rst[out_type]

@@ -35,6 +35,11 @@ class PredicateNode:
         for c in self.children:
             c.parse_lines_recursively(parse_baseline=parse_baseline)
         # remove any children that have no literal
+        """
+        parse_baseline=Trueの場合、ベースライン（基準）となる統計情報を抽出するための処理です。
+        カラム同士の比較やサブクエリなど、統計的に予測困難な条件は除外し、
+        リテラル値との比較やNULLチェックなど、統計的に予測可能な条件のみを残すことで、より正確なカーディナリティ推定を行います。
+        """
         if parse_baseline:
             self.children = [c for c in self.children if
                              c.operator in {LogicalOperator.AND, LogicalOperator.OR,
@@ -42,6 +47,9 @@ class PredicateNode:
                              or c.literal is not None]
 
     def parse_lines(self, parse_baseline=False):
+        """
+        self.text = "  I   love   Python  " -> keywords = ["I", "love", "Python"]
+        """
         keywords = [w.strip() for w in self.text.split(' ') if len(w.strip()) > 0]
         if all([k == 'AND' for k in keywords]):
             self.operator = LogicalOperator.AND
@@ -183,6 +191,30 @@ class PredicateNode:
 
 
 def parse_recursively(filter_cond, offset, _class=PredicateNode):
+    """
+    フィルター条件をパースするための再帰関数。
+    ネストされた括弧や引用符を処理し、ノードのテキストと子ノードを生成します。
+
+    params:
+        filter_cond: フィルター条件の文字列
+        offset: 現在解析している文字列内の位置
+        _class: ノードのクラス
+    returns:
+        PredicateNode: パースされたノード
+        int: 次の解析位置
+
+    入力: "name = 'John' AND (age > 25)" の場合
+    最終的なツリー構造：
+        PredicateNode(
+            text="name = 'John' AND ",
+            children=[
+                PredicateNode(
+                    text="age > 25",
+                    children=[]
+                )
+            ]
+        )
+    """
     escaped = False
 
     node_text = ''

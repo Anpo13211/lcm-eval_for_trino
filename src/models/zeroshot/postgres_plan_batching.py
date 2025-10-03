@@ -287,9 +287,10 @@ def postgres_plan_collator(plans, feature_statistics: dict =None, db_statistics:
 
     # iterate over plans and create lists of edges and features per node
     sample_idxs = []
+    # plans: 複数のクエリの実行計画が入っている
     for sample_idx, p in plans:
         sample_idxs.append(sample_idx)
-        labels.append(p.plan_runtime)
+        labels.append(p.plan_runtime) # それぞれのクエリの実行時間
         plan_to_graph(p, p.database_id, plan_depths, plan_features, plan_to_plan_edges, db_statistics,
                       feature_statistics, filter_to_plan_edges, filter_features, output_column_to_plan_edges,
                       output_column_features, column_to_output_column_edges, column_features, table_features,
