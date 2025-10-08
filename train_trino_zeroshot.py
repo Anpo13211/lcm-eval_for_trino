@@ -1,11 +1,14 @@
-#!/usr/bin/env python3
-"""
-Trino Zero-Shot Model Training Script
-統合版: 効率的なバッチ処理とDataLoader対応
-"""
-
 import sys
 import os
+
+# 環境変数の設定（必須 - import前に実行）
+for i in range(11):
+    env_key = f'NODE{i:02d}'
+    env_value = os.environ.get(env_key)
+    # `.env` で "None" や空文字が設定されていると ast.literal_eval が失敗するため明示的に初期化する
+    if env_value in (None, '', 'None'):
+        os.environ[env_key] = '[]'
+
 sys.path.append('src')
 
 import argparse
@@ -25,10 +28,6 @@ from training.featurizations import TrinoTrueCardDetail
 from models.zeroshot.trino_plan_batching import trino_plan_collator
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
-
-# 環境変数の設定（必須）
-for i in range(11):
-    os.environ.setdefault(f'NODE{i:02d}', '[]')
 
 
 class TrinoPlanDataset(Dataset):
@@ -603,11 +602,18 @@ def main():
         
         # ログ出力
         if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(f"Epoch [{epoch+1}/{args.epochs}] "
-                  f"Train Loss: {train_loss:.4f}, "
-                  f"Val Loss: {val_loss:.4f}, "
-                  f"Val Q-Error: {val_median_q_error:.4f}, "
-                  f"Best: {best_val_loss:.4f} (Epoch {best_epoch})")
+            median_q = f"{val_median_q_error:.4f}" if val_median_q_error is not None else "N/A"
+            mean_q = f"{val_mean_q_error:.4f}" if val_mean_q_error is not None else "N/A"
+            rmse_val = f"{val_rmse:.4f}" if val_rmse is not None else "N/A"
+            print(
+                f"Epoch [{epoch+1}/{args.epochs}] "
+                f"Train Loss: {train_loss:.4f}, "
+                f"Val Loss: {val_loss:.4f}, "
+                f"Val Median Q-Error: {median_q}, "
+                f"Val Mean Q-Error: {mean_q}, "
+                f"Val RMSE: {rmse_val}, "
+                f"Best: {best_val_loss:.4f} (Epoch {best_epoch})"
+            )
     
     print()
     print("✅ トレーニング完了!")
