@@ -18,7 +18,9 @@ class Operator(Enum):
     IS_NOT_NULL = 'IS NOT NULL'
     IS_NULL = 'IS NULL'
     IN = 'IN'
+    NOT_IN = 'NOT IN'
     BETWEEN = 'BETWEEN'
+    NOT_BETWEEN = 'NOT BETWEEN'
 
     def __str__(self):
         return self.value

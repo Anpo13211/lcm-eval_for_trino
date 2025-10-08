@@ -59,6 +59,18 @@ class NodeTypeEncoder(FcOutModel):
         if self.no_input_required:
             return self.replacement_param.repeat(input.shape[0], 1)
 
+        # 空のテンソルの場合の処理
+        if input.numel() == 0:
+            # 空のテンソルの場合は、適切な形状のゼロテンソルを返す
+            batch_size = 0
+            if len(input.shape) > 0:
+                batch_size = input.shape[0]
+            return torch.zeros(batch_size, self.input_dim, device=input.device, dtype=input.dtype)
+
+        # 1次元テンソルの場合は2次元に変換
+        if len(input.shape) == 1:
+            input = input.unsqueeze(0)
+        
         assert input.shape[1] == self.input_feature_idx
         encoded_input = []
         for feat, feat_type, feat_idxs in zip(self.features, self.feature_types, self.feature_idxs):

@@ -4,6 +4,7 @@ from enum import Enum
 class DatabaseSystem(Enum):
     POSTGRES = 'postgres'
     MYSQL = 'mysql'
+    TRINO = 'trino'
 
     def __str__(self):
         return self.value

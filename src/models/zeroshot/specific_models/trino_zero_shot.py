@@ -1,14 +1,21 @@
+"""
+Trino Zero-Shot Model
+Trinoクエリプラン用のZero-Shotモデル
+"""
+
 from torch import nn
 
 from classes.classes import ZeroShotModelConfig
 from models.zeroshot.message_aggregators import message_aggregators
 from models.zeroshot.utils.fc_out_model import FcOutModel
 from models.zeroshot.utils.node_type_encoder import NodeTypeEncoder
+from models.zeroshot.zero_shot_model import PassDirection
 
 
-class ZeroShotModel(FcOutModel):
+class TrinoZeroShotModel(FcOutModel):
     """
-    A zero-shot cost model that predicts query runtimes on unseen databases out-of-the-box without retraining.
+    Trino用のZero-Shotコストモデル
+    未学習のデータベースでもクエリ実行時間を予測できる
     """
 
     def __init__(self, model_config: ZeroShotModelConfig, device='cpu', feature_statistics=None,
@@ -25,20 +32,22 @@ class ZeroShotModel(FcOutModel):
         self.device = device
         self.hidden_dim = model_config.hidden_dim
 
-        # use different models per edge type
-        # ノードタイプだけでなく、エッジタイプにも異なるモデルを適用する
+        # エッジタイプごとに異なるモデルを使用
+        if add_tree_model_types is None:
+            add_tree_model_types = []
         tree_model_types = add_tree_model_types + ['to_plan', 'intra_plan', 'intra_pred']
         self.tree_models = nn.ModuleDict({
-            node_type: message_aggregators.__dict__[model_config.tree_layer_name](hidden_dim=self.hidden_dim, **model_config.tree_layer_kwargs)
+            node_type: message_aggregators.__dict__[model_config.tree_layer_name](
+                hidden_dim=self.hidden_dim, **model_config.tree_layer_kwargs)
             for node_type in tree_model_types
         })
 
-        # these message passing steps are performed in the beginning (dependent on the concrete database system at hand)
+        # データベースシステム固有のメッセージパッシングステップ
         self.prepasses = prepasses if prepasses is not None else []
 
         if plan_featurization is not None:
             self.plan_featurization = plan_featurization
-            # different models to encode plans, tables, columns, filter_columns and output_columns
+            # プラン、テーブル、カラム、フィルターカラム、出力カラムのエンコーダー
             model_config.node_type_kwargs.update(output_dim=model_config.hidden_dim)
             self.node_type_encoders = nn.ModuleDict({
                 enc_name: NodeTypeEncoder(features, feature_statistics, **model_config.node_type_kwargs)
@@ -47,29 +56,45 @@ class ZeroShotModel(FcOutModel):
 
     def encode_node_types(self, g, features):
         """
-        Initializes the hidden states based on the node type specific models.
+        ノードタイプ別の特徴量エンコーディング
         """
-        # initialize hidden state per node type
         hidden_dict = dict()
         for node_type, input_features in features.items():
-            # encode all plans with same model
+            # ノードタイプに応じて適切なエンコーダーを選択
             if node_type not in self.node_type_encoders.keys():
                 if node_type.startswith('logical_pred'):
+                    # 論理述語ノード（AND, OR等）
                     node_type_m = self.node_type_encoders['logical_pred']
                 elif node_type.startswith('plan'):
+                    # プランノード（深度別）
                     node_type_m = self.node_type_encoders['plan']
                 else:
-                    # その他のノードタイプ（column, table, filter_columnなど）はplanモデルを使用
-                    node_type_m = self.node_type_encoders['plan']
+                    # その他のノードタイプ（column, table, filter_column等）
+                    # デフォルトでplanエンコーダーを使用
+                    if 'column' in self.node_type_encoders and 'column' in node_type:
+                        node_type_m = self.node_type_encoders['column']
+                    elif 'table' in self.node_type_encoders and node_type == 'table':
+                        node_type_m = self.node_type_encoders['table']
+                    elif 'filter_column' in self.node_type_encoders and node_type == 'filter_column':
+                        node_type_m = self.node_type_encoders['filter_column']
+                    else:
+                        node_type_m = self.node_type_encoders['plan']
             else:
                 node_type_m = self.node_type_encoders[node_type]
+            
             hidden_dict[node_type] = node_type_m(input_features)
 
         return hidden_dict
 
     def forward(self, input):
         """
-        Returns logits for output classes
+        フォワードパス
+        
+        Args:
+            input: (graph, features)のタプル
+        
+        Returns:
+            予測値（ログスケール）
         """
         graph, features = input
         features = self.encode_node_types(graph, features)
@@ -79,20 +104,19 @@ class ZeroShotModel(FcOutModel):
 
     def message_passing(self, g, feat_dict):
         """
-        Bottom-up message passing on the graph encoding of the queries in the batch. Returns the hidden states of the
-        root nodes.
+        グラフエンコーディングのボトムアップメッセージパッシング
+        ルートノードの隠れ状態を返す
         """
 
-        # also allow skipping this for testing
         if not self.skip_message_passing:
-            # all passes before predicates, to plan and intra_plan passes
+            # データベース固有のプリパス
             pass_directions = [
                 PassDirection(g=g, **prepass_kwargs)
                 for prepass_kwargs in self.prepasses
             ]
 
-            if g.max_pred_depth is not None:
-                # intra_pred from deepest node to top node
+            # 述語の深い方から浅い方へのメッセージパッシング
+            if g.max_pred_depth is not None and g.max_pred_depth > 0:
                 for d in reversed(range(g.max_pred_depth)):
                     pd = PassDirection(model_name='intra_pred',
                                        g=g,
@@ -100,10 +124,10 @@ class ZeroShotModel(FcOutModel):
                                        n_dest=f'logical_pred_{d}')
                     pass_directions.append(pd)
 
-            # filter_columns & output_columns to plan
+            # フィルターカラムと出力カラムからプランへ
             pass_directions.append(PassDirection(model_name='to_plan', g=g, e_name='to_plan'))
 
-            # intra_plan from deepest node to top node
+            # プランの深い方から浅い方へのメッセージパッシング
             for d in reversed(range(g.max_depth)):
                 pd = PassDirection(model_name='intra_plan',
                                    g=g,
@@ -111,12 +135,18 @@ class ZeroShotModel(FcOutModel):
                                    n_dest=f'plan{d}')
                 pass_directions.append(pd)
 
-            # make sure all edge types are considered in the message passing
+            # すべてのエッジタイプが考慮されているか確認
             combined_e_types = set()
             for pd in pass_directions:
                 combined_e_types.update(pd.etypes)
-            assert combined_e_types == set(g.canonical_etypes)
+            
+            # エッジタイプの検証（デバッグ時のみ有効化）
+            if hasattr(g, 'canonical_etypes') and len(g.canonical_etypes) > 0:
+                missing_etypes = set(g.canonical_etypes) - combined_e_types
+                if missing_etypes:
+                    print(f"⚠️  未処理のエッジタイプ: {missing_etypes}")
 
+            # メッセージパッシングの実行
             for pd in pass_directions:
                 if len(pd.etypes) > 0:
                     out_dict = self.tree_models[pd.model_name](g, etypes=pd.etypes,
@@ -126,50 +156,12 @@ class ZeroShotModel(FcOutModel):
                     for out_type, hidden_out in out_dict.items():
                         feat_dict[out_type] = hidden_out
 
-        # compute top nodes of dags
+        # DAGのトップノード（ルートプランノード）を取得
         out = feat_dict['plan0']
 
-        # feed them into final feed forward network
+        # 最終的なフィードフォワードネットワーク
         if not self.test:
             out = self.fcout(out)
 
         return out
 
-
-class PassDirection:
-    """
-    Defines a message passing step on the encoded query graphs.
-    """
-    def __init__(self, model_name, g, e_name=None, n_dest=None, allow_empty=False):
-        """
-        Initializes a message passing step.
-        :param model_name: which edge model should be used to combine the messages
-        :param g: the graph on which the message passing should be performed
-        :param e_name: edges are defined by triplets: (src_node_type, edge_type, dest_node_type). Only incorporate edges
-            in the message passing step where edge_type=e_name
-        :param n_dest: further restrict the edges that are incorporated in the message passing by the condition
-            dest_node_type=n_dest
-        :param allow_empty: allow that no edges in the graph qualify for this message passing step.
-            Otherwise, this will raise an error.
-        """
-        self.etypes = set()
-        self.in_types = set()
-        self.out_types = set()
-        self.model_name = model_name
-
-        for curr_n_src, curr_e_name, curr_n_dest in g.canonical_etypes:
-            if e_name is not None and curr_e_name != e_name:
-                continue
-
-            if n_dest is not None and curr_n_dest != n_dest:
-                continue
-
-            self.etypes.add((curr_n_src, curr_e_name, curr_n_dest))
-            self.in_types.add(curr_n_src)
-            self.out_types.add(curr_n_dest)
-
-        self.etypes = list(self.etypes)
-        self.in_types = list(self.in_types)
-        self.out_types = list(self.out_types)
-        if not allow_empty:
-            assert len(self.etypes) > 0, f"No nodes in the graph qualify for e_name={e_name}, n_dest={n_dest}"

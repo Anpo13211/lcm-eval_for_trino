@@ -252,3 +252,99 @@ class PostgresTrueCardDecAblationTableFeats(Featurization):
     COLUMN_FEATURES = ['avg_width', 'correlation', 'data_type', 'n_distinct', 'null_frac']
     OUTPUT_COLUMN_FEATURES = ['aggregation']
     TABLE_FEATURES = ['reltuples', 'relpages']
+
+
+# Trino用の特徴量化クラス
+class TrinoFeaturization(Featurization):
+    """Trino用の基本特徴量化クラス"""
+    pass
+
+
+class TrinoTrueCardDetail(TrinoFeaturization):
+    """Trino用の詳細特徴量化（実際のカーディナリティ使用）"""
+    PLAN_FEATURES = ['act_output_rows', 'est_rows', 'workers_planned', 'op_name', 'act_children_card']
+    FILTER_FEATURES = ['operator', 'literal_feature']
+    COLUMN_FEATURES = ['avg_width', 'correlation', 'data_type', 'n_distinct', 'null_frac']
+    OUTPUT_COLUMN_FEATURES = ['aggregation']
+    TABLE_FEATURES = ['reltuples', 'relpages']
+
+    VARIABLES = {
+        "column": COLUMN_FEATURES,
+        "table": TABLE_FEATURES,
+        "output_column": OUTPUT_COLUMN_FEATURES,
+        "filter_column": FILTER_FEATURES + COLUMN_FEATURES,
+        "plan": PLAN_FEATURES,
+        "logical_pred": FILTER_FEATURES,
+    }
+
+
+class TrinoTrueCardMedium(TrinoFeaturization):
+    """Trino用の中程度特徴量化（実際のカーディナリティ使用）"""
+    PLAN_FEATURES = ['act_output_rows', 'est_rows', 'workers_planned', 'op_name', 'act_children_card']
+    FILTER_FEATURES = ['operator', 'literal_feature']
+    COLUMN_FEATURES = ['avg_width', 'data_type', 'table_size']
+    OUTPUT_COLUMN_FEATURES = ['aggregation']
+    TABLE_FEATURES = ['reltuples', 'relpages']
+
+    VARIABLES = {
+        "column": COLUMN_FEATURES,
+        "table": TABLE_FEATURES,
+        "output_column": OUTPUT_COLUMN_FEATURES,
+        "filter_column": FILTER_FEATURES + COLUMN_FEATURES,
+        "plan": PLAN_FEATURES,
+        "logical_pred": FILTER_FEATURES,
+    }
+
+
+class TrinoTrueCardCoarse(TrinoFeaturization):
+    """Trino用の粗い特徴量化（実際のカーディナリティ使用）"""
+    PLAN_FEATURES = ['act_output_rows', 'est_rows', 'workers_planned', 'op_name']
+    FILTER_FEATURES = ['operator', 'literal_feature']
+    COLUMN_FEATURES = ['avg_width', 'data_type']
+    OUTPUT_COLUMN_FEATURES = ['aggregation']
+    TABLE_FEATURES = ['reltuples', 'relpages']
+
+    VARIABLES = {
+        "column": COLUMN_FEATURES,
+        "table": TABLE_FEATURES,
+        "output_column": OUTPUT_COLUMN_FEATURES,
+        "filter_column": FILTER_FEATURES + COLUMN_FEATURES,
+        "plan": PLAN_FEATURES,
+        "logical_pred": FILTER_FEATURES,
+    }
+
+
+class TrinoEstSystemCardDetail(TrinoFeaturization):
+    """Trino用の詳細特徴量化（システム推定カーディナリティ使用）"""
+    PLAN_FEATURES = ['est_rows', 'workers_planned', 'op_name', 'est_children_card']
+    FILTER_FEATURES = ['operator', 'literal_feature']
+    COLUMN_FEATURES = ['avg_width', 'correlation', 'data_type', 'n_distinct', 'null_frac']
+    OUTPUT_COLUMN_FEATURES = ['aggregation']
+    TABLE_FEATURES = ['reltuples', 'relpages']
+
+    VARIABLES = {
+        "column": COLUMN_FEATURES,
+        "table": TABLE_FEATURES,
+        "output_column": OUTPUT_COLUMN_FEATURES,
+        "filter_column": FILTER_FEATURES + COLUMN_FEATURES,
+        "plan": PLAN_FEATURES,
+        "logical_pred": FILTER_FEATURES,
+    }
+
+
+class TrinoEstSystemCardCoarse(TrinoFeaturization):
+    """Trino用の粗い特徴量化（システム推定カーディナリティ使用）"""
+    PLAN_FEATURES = ['est_rows', 'workers_planned', 'op_name']
+    FILTER_FEATURES = ['operator', 'literal_feature']
+    COLUMN_FEATURES = ['avg_width', 'data_type']
+    OUTPUT_COLUMN_FEATURES = ['aggregation']
+    TABLE_FEATURES = ['reltuples', 'relpages']
+
+    VARIABLES = {
+        "column": COLUMN_FEATURES,
+        "table": TABLE_FEATURES,
+        "output_column": OUTPUT_COLUMN_FEATURES,
+        "filter_column": FILTER_FEATURES + COLUMN_FEATURES,
+        "plan": PLAN_FEATURES,
+        "logical_pred": FILTER_FEATURES,
+    }

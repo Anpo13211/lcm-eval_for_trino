@@ -1,8 +1,10 @@
 import json
 import os
 
+from cross_db_benchmark.benchmark_tools.database import DatabaseSystem
 from cross_db_benchmark.benchmark_tools.postgres.combine_plans import combine_traces
 from cross_db_benchmark.benchmark_tools.postgres.parse_plan import parse_plans
+from cross_db_benchmark.benchmark_tools.trino.parse_plan import parse_trino_plans
 from cross_db_benchmark.benchmark_tools.utils import load_json
 
 
@@ -18,8 +20,15 @@ def parse_run(source_paths, target_path, database, min_query_ms=100, max_query_m
               explain_only=False):
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
-    parse_func = parse_plans
-    comb_func = combine_traces
+    # データベースに応じてパース関数を選択
+    if database == DatabaseSystem.POSTGRES:
+        parse_func = parse_plans
+        comb_func = combine_traces
+    elif database == DatabaseSystem.TRINO:
+        parse_func = parse_trino_plans
+        comb_func = combine_traces  # Trinoでも同じcombine関数を使用
+    else:
+        raise NotImplementedError(f"Database {database} not yet supported.")
 
     if not isinstance(source_paths, list):
         source_paths = [source_paths]
