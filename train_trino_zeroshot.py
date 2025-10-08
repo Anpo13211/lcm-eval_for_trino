@@ -549,12 +549,17 @@ def main():
         ('output_column', plan_featurization.OUTPUT_COLUMN_FEATURES)
     ]
     
+    # Trino固有のメッセージパッシング（columnからoutput_columnへ）
+    prepasses = [dict(model_name='column_output_column', e_name='col_output_col')]
+    tree_model_types = ['column_output_column']
+    
     model = TrinoZeroShotModel(
         model_config=model_config,
         device=args.device,
         feature_statistics=feature_statistics,
         plan_featurization=plan_featurization,
-        add_tree_model_types=[],
+        prepasses=prepasses,
+        add_tree_model_types=tree_model_types,
         encoders=encoders
     )
     
