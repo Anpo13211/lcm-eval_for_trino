@@ -397,18 +397,22 @@ def build_hierarchy(operators, all_fragment_operators=None):
     return root_operator
 
 
-def generate_output_columns_manually(node):
-    """手動でoutput_columnsを生成（Trino用）"""
-    # 現在のノードのoutput_columnsを生成
-    if 'layout' in node.plan_parameters:
-        layout = node.plan_parameters['layout']
-        if layout:
-            output_columns = node.parse_output_columns(','.join(layout))
-            node.plan_parameters['output_columns'] = output_columns
+def generate_output_columns_manually(node, is_root=True):
+    """手動でoutput_columnsを生成（Trino用）- ルートノードのみ"""
+    # ルートノードのみでoutput_columnsを生成（中間演算子の複雑なカラム名を避ける）
+    if is_root:
+        if 'layout' in node.plan_parameters:
+            layout = node.plan_parameters['layout']
+            if layout:
+                try:
+                    output_columns = node.parse_output_columns(','.join(layout))
+                    node.plan_parameters['output_columns'] = output_columns
+                except Exception as e:
+                    print(f"⚠️  output_columns生成でエラー（無視）: {e}")
     
-    # 子ノードも再帰的に処理
+    # 子ノードも再帰的に処理（is_root=False）
     for child in node.children:
-        generate_output_columns_manually(child)
+        generate_output_columns_manually(child, is_root=False)
 
 
 def integrate_all_fragments(root_operator, all_fragment_operators):

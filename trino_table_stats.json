@@ -1,0 +1,44 @@
+{
+  "accidents:public.upravna_enota": {
+    "reltuples": 58,
+    "relpages": 1,
+    "columns": {
+      "id_upravna_enota": {
+        "avg_width": 4,
+        "correlation": 0.9,
+        "n_distinct": 58,
+        "null_frac": 0.0
+      },
+      "povrsina": {
+        "avg_width": 4,
+        "correlation": 0.1,
+        "n_distinct": 58,
+        "null_frac": 0.0
+      }
+    }
+  },
+  "accidents:public.oseba": {
+    "reltuples": 954036,
+    "relpages": 4770,
+    "columns": {
+      "upravna_enota": {
+        "avg_width": 4,
+        "correlation": 0.1,
+        "n_distinct": 1000,
+        "null_frac": 0.0
+      },
+      "varnostni_pas_ali_celada": {
+        "avg_width": 1,
+        "correlation": 0.1,
+        "n_distinct": 2,
+        "null_frac": 0.0
+      },
+      "vozniski_staz_LL": {
+        "avg_width": 4,
+        "correlation": 0.1,
+        "n_distinct": 100,
+        "null_frac": 0.0
+      }
+    }
+  }
+}

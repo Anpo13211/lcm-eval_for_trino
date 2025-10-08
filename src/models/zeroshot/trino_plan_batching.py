@@ -7,7 +7,7 @@ import torch
 from sklearn.preprocessing import RobustScaler
 
 from cross_db_benchmark.benchmark_tools.trino.parse_filter import PredicateNode
-from cross_db_benchmark.benchmark_tools.generate_workload import Operator
+from cross_db_benchmark.benchmark_tools.generate_workload import LogicalOperator
 from training.featurizations import Featurization
 from training.preprocessing.feature_statistics import FeatureType
 
@@ -82,6 +82,16 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
     current_plan_id = len(plan_depths)
     plan_depths.append(depth)
     
+    # データベース統計を取得
+    db_stats = None
+    if db_statistics is not None:
+        if isinstance(db_statistics, dict):
+            db_stats = db_statistics.get(database_id)
+        else:
+            db_stats = getattr(db_statistics, database_id, None)
+
+    db_column_stats = getattr(db_stats, 'column_stats', None) if db_stats is not None else None
+
     # プランの特徴量を抽出
     plan_feat = []
     for feat_name in plan_featurization.VARIABLES['plan']:
@@ -131,87 +141,72 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
         # テーブルからプランへのエッジを追加
         table_to_plan_edges.append((table_idx[table_name], current_plan_id))
     
-    # カラム情報の処理
-    if 'columns' in node.plan_parameters:
-        columns = node.plan_parameters['columns']
-        for column in columns:
-            # カラムのインデックスを取得または作成
-            if column not in column_idx:
-                column_idx[column] = len(column_features)
-                
-                # カラムの特徴量を抽出（Trinoでは0に設定）
-                column_feat = []
-                for feat_name in plan_featurization.VARIABLES['column']:
-                    column_feat.append(0.0)  # Trinoではカラム統計を取得できない
-                
-                column_features.append(column_feat)
     
     # 出力カラム情報の処理
     if 'output_columns' in node.plan_parameters:
         output_columns = node.plan_parameters['output_columns']
         for output_col in output_columns:
+            output_col_key = (
+                output_col.get('aggregation'),
+                tuple(output_col.get('columns', [])),
+                database_id,
+            )
+
             # 出力カラムのインデックスを取得または作成
-            if output_col not in output_column_idx:
-                output_column_idx[output_col] = len(output_column_features)
-                
-                # 出力カラムの特徴量を抽出
+            output_column_node_id = output_column_idx.get(output_col_key)
+            if output_column_node_id is None:
                 output_col_feat = []
                 for feat_name in plan_featurization.VARIABLES['output_column']:
-                    if feat_name == 'aggregation':
-                        # aggregation特徴量を抽出
-                        agg_value = output_col.get('aggregation', None)
-                        if agg_value:
-                            # 集約関数を数値にエンコード
-                            agg_encoding = {
-                                'Aggregator.COUNT': 0,
-                                'Aggregator.SUM': 1,
-                                'Aggregator.AVG': 2,
-                                'Aggregator.MIN': 3,
-                                'Aggregator.MAX': 4,
-                                None: 5  # 集約なし
-                            }
-                            enc_value = agg_encoding.get(agg_value, 5)
-                        else:
-                            enc_value = 5  # 集約なし
-                        output_col_feat.append(float(enc_value))
-                    else:
-                        output_col_feat.append(0.0)  # その他の特徴量はデフォルト値
-                
+                    output_col_feat.append(
+                        encode_or_zero(feat_name, output_col, feature_statistics)
+                    )
+
+                output_column_node_id = len(output_column_features)
                 output_column_features.append(output_col_feat)
-            
+                output_column_idx[output_col_key] = output_column_node_id
+
             # 出力カラムからプランへのエッジを追加
-            output_column_to_plan_edges.append((output_column_idx[output_col], current_plan_id))
+            output_column_to_plan_edges.append((output_column_node_id, current_plan_id))
+
+            # 出力カラムに関連付いた元カラムとのエッジを構築
+            for column in output_col.get('columns', []):
+                if isinstance(column, list):
+                    column = tuple(column)
+                column_key = (column, database_id)
+                column_node_id = column_idx.get(column_key)
+
+                if column_node_id is None:
+                    column_stats = lookup_stats(db_column_stats, column)
+                    column_params = as_dict(column_stats)
+
+                    column_feat = []
+                    for feat_name in plan_featurization.VARIABLES['column']:
+                        column_feat.append(
+                            encode_or_zero(feat_name, column_params, feature_statistics)
+                        )
+
+                    column_node_id = len(column_features)
+                    column_features.append(column_feat)
+                    column_idx[column_key] = column_node_id
+
+                column_to_output_column_edges.append((column_node_id, output_column_node_id))
     
     # フィルター情報の処理
-    if 'filter_predicate' in node.plan_parameters and node.plan_parameters['filter_predicate']:
-        filter_predicate = node.plan_parameters['filter_predicate']
-        
-        # フィルターの特徴量を抽出
-        filter_feat = []
-        for feat_name in plan_featurization.VARIABLES['filter_column']:
-            if feat_name == 'operator':
-                # フィルター演算子の特徴量
-                filter_feat.append(0.0)  # デフォルト値
-            elif feat_name == 'literal_feature':
-                # リテラル値の特徴量
-                filter_feat.append(0.0)  # デフォルト値
-            else:
-                filter_feat.append(0.0)
-        
-        predicate_col_features.append(filter_feat)
-        filter_to_plan_edges.append((len(predicate_col_features) - 1, current_plan_id))
-    
-    # 動的フィルター情報の処理
-    if 'dynamic_filters' in node.plan_parameters and node.plan_parameters['dynamic_filters']:
-        dynamic_filters = node.plan_parameters['dynamic_filters']
-        
-        # 動的フィルターの特徴量を抽出
-        dynamic_filter_feat = []
-        for feat_name in plan_featurization.VARIABLES['filter_column']:
-            dynamic_filter_feat.append(0.0)  # デフォルト値
-        
-        predicate_col_features.append(dynamic_filter_feat)
-        filter_to_plan_edges.append((len(predicate_col_features) - 1, current_plan_id))
+    filter_column = node.plan_parameters.get('filter_columns')
+    if filter_column:
+        filter_column_dict = predicate_to_dict(filter_column)
+        parse_predicates(
+            db_column_stats,
+            feature_statistics,
+            filter_column_dict,
+            filter_to_plan_edges,
+            plan_featurization,
+            predicate_col_features,
+            predicate_depths,
+            intra_predicate_edges,
+            logical_preds,
+            plan_node_id=current_plan_id,
+        )
     
     # 子ノードを再帰的に処理
     for child in node.children:
@@ -221,6 +216,123 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
                       table_to_plan_edges, output_column_idx, column_idx, table_idx,
                       plan_featurization, predicate_depths, intra_predicate_edges, logical_preds,
                       parent_node_id=current_plan_id, depth=depth + 1)
+
+
+def encode_or_zero(feature_name, params, feature_statistics):
+    """指定した特徴量をエンコードする（欠損時は0を返す）"""
+    if feature_statistics is None or feature_name not in feature_statistics:
+        return 0.0
+
+    if params is None:
+        return 0.0
+
+    if isinstance(params, PredicateNode):
+        params = vars(params)
+    elif not isinstance(params, dict):
+        params = vars(params)
+
+    if feature_name not in params:
+        return 0.0
+
+    # aggregation特徴量の特別処理
+    if feature_name == 'aggregation':
+        agg_value = params[feature_name]
+        if agg_value:
+            # 集約関数を数値にエンコード
+            agg_encoding = {
+                'Aggregator.COUNT': 0,
+                'Aggregator.SUM': 1,
+                'Aggregator.AVG': 2,
+                'Aggregator.MIN': 3,
+                'Aggregator.MAX': 4,
+                None: 5  # 集約なし
+            }
+            enc_value = agg_encoding.get(agg_value, 5)
+            return float(enc_value)
+        else:
+            return 5.0  # 集約なし
+
+    try:
+        return encode(feature_name, params, feature_statistics)
+    except (KeyError, ValueError):
+        return 0.0
+
+
+def lookup_stats(stats_container, key):
+    """統計情報を取得するユーティリティ"""
+    if stats_container is None or key is None:
+        return None
+
+    if isinstance(stats_container, dict):
+        return stats_container.get(key)
+
+    if hasattr(stats_container, 'get'):
+        try:
+            return stats_container.get(key)
+        except Exception:
+            pass
+
+    return None
+
+
+def as_dict(obj):
+    """オブジェクトを辞書に変換する"""
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return obj
+    return vars(obj)
+
+
+def predicate_to_dict(predicate):
+    """述語ノードを辞書形式に正規化する"""
+    if isinstance(predicate, PredicateNode):
+        return predicate.to_dict()
+    return predicate
+
+
+def parse_predicates(db_column_features, feature_statistics, filter_column, filter_to_plan_edges,
+                     plan_featurization, predicate_col_features, predicate_depths, intra_predicate_edges,
+                     logical_preds, plan_node_id=None, parent_filter_node_id=None, depth=0):
+    """述語ツリーを再帰的に解析して特徴量とエッジを構築する"""
+    if filter_column is None:
+        return
+
+    filter_params = as_dict(filter_column)
+    filter_node_id = len(predicate_depths)
+    predicate_depths.append(depth)
+
+    operator_value = filter_params.get('operator')
+    logical_operators = {str(op) for op in list(LogicalOperator)}
+    is_logical = operator_value in logical_operators
+    logical_preds.append(is_logical)
+
+    curr_filter_features = []
+    for feature_name in plan_featurization.FILTER_FEATURES:
+        curr_filter_features.append(encode_or_zero(feature_name, filter_params, feature_statistics))
+
+    if not is_logical:
+        column_id = filter_params.get('column')
+        column_stats = lookup_stats(db_column_features, column_id)
+        column_params = as_dict(column_stats)
+        for feature_name in plan_featurization.COLUMN_FEATURES:
+            curr_filter_features.append(encode_or_zero(feature_name, column_params, feature_statistics))
+
+    predicate_col_features.append(curr_filter_features)
+
+    if depth == 0:
+        assert plan_node_id is not None
+        filter_to_plan_edges.append((filter_node_id, plan_node_id))
+    else:
+        assert parent_filter_node_id is not None
+        intra_predicate_edges.append((filter_node_id, parent_filter_node_id))
+
+    for child in filter_params.get('children', []):
+        child_dict = predicate_to_dict(child)
+        parse_predicates(db_column_features, feature_statistics, child_dict, filter_to_plan_edges,
+                         plan_featurization, predicate_col_features, predicate_depths, intra_predicate_edges,
+                         logical_preds, plan_node_id=plan_node_id, parent_filter_node_id=filter_node_id,
+                         depth=depth + 1)
 
 
 def trino_plan_collator(plans, feature_statistics: dict = None, db_statistics: dict = None,
@@ -335,11 +447,6 @@ def trino_plan_collator(plans, feature_statistics: dict = None, db_statistics: d
     
     # 使用されるノードタイプのみをnum_nodes_dictに含める（ノード数が0でも含める）
     filtered_num_nodes_dict = {k: v for k, v in num_nodes_dict.items() if k in used_node_types}
-    
-    # デバッグ情報を出力
-    print(f"🔍 num_nodes_dict: {num_nodes_dict}")
-    print(f"🔍 used_node_types: {used_node_types}")
-    print(f"🔍 filtered_num_nodes_dict: {filtered_num_nodes_dict}")
     
     # グラフを作成
     graph = dgl.heterograph(data_dict, num_nodes_dict=filtered_num_nodes_dict)
