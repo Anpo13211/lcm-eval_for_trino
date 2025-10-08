@@ -22,12 +22,13 @@ from torch.utils.data import DataLoader, Dataset, random_split
 import numpy as np
 from tqdm import tqdm
 
-from cross_db_benchmark.benchmark_tools.trino.parse_plan import parse_trino_plans
+from cross_db_benchmark.benchmark_tools.trino.parse_plan import parse_trino_plans, trino_timing_regex
 from models.zeroshot.specific_models.trino_zero_shot import TrinoZeroShotModel
 from training.featurizations import TrinoTrueCardDetail
 from models.zeroshot.trino_plan_batching import trino_plan_collator
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
+from training.training.metrics import QError, RMSE
 
 
 class TrinoPlanDataset(Dataset):
@@ -59,12 +60,24 @@ class MockQuery:
         self.verbose_plan = plan_text.split('\n')
         
         # 実行時間を抽出
-        import re
-        execution_time_match = re.search(r'Execution Time: ([\d.]+)ms', plan_text)
-        if execution_time_match:
-            self.execution_time = float(execution_time_match.group(1))
-        else:
-            self.execution_time = 1000.0  # デフォルトの実行時間（ミリ秒）
+        execution_time = None
+        
+        timing_match = trino_timing_regex.search(plan_text)
+        if timing_match:
+            execution_time = float(timing_match.group(4))
+            execution_unit = timing_match.group(5)
+            if execution_unit == 's':
+                execution_time *= 1000
+        
+        if execution_time is None:
+            # 古い書式 ("Execution Time: <value><unit>") にも対応
+            execution_time_match = re.search(r'Execution(?: Time)?: ([\d.]+)(ms|s)', plan_text)
+            if execution_time_match:
+                execution_time = float(execution_time_match.group(1))
+                if execution_time_match.group(2) == 's':
+                    execution_time *= 1000
+        
+        self.execution_time = execution_time if execution_time is not None else 1000.0  # デフォルトの実行時間（ミリ秒）
 
 
 class MockRunStats:
@@ -373,13 +386,18 @@ def validate(model, val_loader, device):
         predictions_all = np.concatenate(predictions_all).flatten()
         labels_all = np.concatenate(labels_all).flatten()
         
-        # Q-Error
-        q_errors = np.maximum(predictions_all / labels_all, labels_all / predictions_all)
-        median_q_error = np.median(q_errors)
-        mean_q_error = np.mean(q_errors)
+        # ゼロ除算を防ぐために小さな値でクリッピング
+        epsilon = 1e-6
+        safe_predictions = np.clip(predictions_all, epsilon, None)
+        safe_labels = np.clip(labels_all, epsilon, None)
         
-        # RMSE
-        rmse = np.sqrt(np.mean((predictions_all - labels_all) ** 2))
+        # Q-Error (metrics.pyの実装を使用)
+        median_q_error = QError(percentile=50).evaluate_metric(labels=safe_labels, preds=safe_predictions)
+        q_errors = np.maximum(safe_predictions / safe_labels, safe_labels / safe_predictions)
+        mean_q_error = float(np.mean(q_errors))
+        
+        # RMSE (metrics.pyの実装を使用)
+        rmse = RMSE().evaluate_metric(labels=labels_all, preds=predictions_all)
         
         return avg_loss, median_q_error, mean_q_error, rmse
     
