@@ -157,7 +157,25 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
                 # 出力カラムの特徴量を抽出
                 output_col_feat = []
                 for feat_name in plan_featurization.VARIABLES['output_column']:
-                    output_col_feat.append(0.0)  # デフォルト値
+                    if feat_name == 'aggregation':
+                        # aggregation特徴量を抽出
+                        agg_value = output_col.get('aggregation', None)
+                        if agg_value:
+                            # 集約関数を数値にエンコード
+                            agg_encoding = {
+                                'Aggregator.COUNT': 0,
+                                'Aggregator.SUM': 1,
+                                'Aggregator.AVG': 2,
+                                'Aggregator.MIN': 3,
+                                'Aggregator.MAX': 4,
+                                None: 5  # 集約なし
+                            }
+                            enc_value = agg_encoding.get(agg_value, 5)
+                        else:
+                            enc_value = 5  # 集約なし
+                        output_col_feat.append(float(enc_value))
+                    else:
+                        output_col_feat.append(0.0)  # その他の特徴量はデフォルト値
                 
                 output_column_features.append(output_col_feat)
             

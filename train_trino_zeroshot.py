@@ -55,6 +55,17 @@ class MockQuery:
         self.plan_text = plan_text
         self.timeout = False
         self.analyze_plans = [plan_text]  # parse_trino_plansが期待する形式
+        
+        # verbose_planはリスト形式で提供（parse_trino_plansが期待する形式）
+        self.verbose_plan = plan_text.split('\n')
+        
+        # 実行時間を抽出
+        import re
+        execution_time_match = re.search(r'Execution Time: ([\d.]+)ms', plan_text)
+        if execution_time_match:
+            self.execution_time = float(execution_time_match.group(1))
+        else:
+            self.execution_time = 1000.0  # デフォルトの実行時間（ミリ秒）
 
 
 class MockRunStats:
@@ -233,6 +244,21 @@ def create_dummy_feature_statistics(plan_featurization):
                 'value_dict': operator_dict,
                 'no_vals': len(operator_dict)
             }
+        elif feat_name == 'aggregation':
+            # 集約関数の特徴量統計
+            aggregation_dict = {
+                'Aggregator.COUNT': 0,
+                'Aggregator.SUM': 1,
+                'Aggregator.AVG': 2,
+                'Aggregator.MIN': 3,
+                'Aggregator.MAX': 4,
+                None: 5  # 集約なし
+            }
+            feature_statistics[feat_name] = {
+                'type': str(FeatureType.categorical),
+                'value_dict': aggregation_dict,
+                'no_vals': len(aggregation_dict)
+            }
         elif feat_name in ['table_name', 'column_name']:
             feature_statistics[feat_name] = {
                 'type': str(FeatureType.categorical),
@@ -245,7 +271,9 @@ def create_dummy_feature_statistics(plan_featurization):
                 'mean': 0.0,
                 'std': 1.0,
                 'min': 0.0,
-                'max': 1000000.0
+                'max': 1000000.0,
+                'center': 0.0,
+                'scale': 1.0
             }
         else:
             # その他の特徴量は数値として扱う
@@ -254,7 +282,9 @@ def create_dummy_feature_statistics(plan_featurization):
                 'mean': 0.0,
                 'std': 1.0,
                 'min': 0.0,
-                'max': 100.0
+                'max': 100.0,
+                'center': 0.0,
+                'scale': 1.0
             }
     
     return feature_statistics

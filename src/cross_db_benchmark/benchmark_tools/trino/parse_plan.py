@@ -385,10 +385,30 @@ def build_hierarchy(operators, all_fragment_operators=None):
     # 演算子の詳細解析
     root_operator.parse_lines_recursively()
     
-    # 子ノードのカーディナリティを計算（Trinoでは簡略化）
-    # root_operator.parse_columns_bottom_up({}, {}, {}, alias_dict={})
+    # 子ノードのカーディナリティを計算とoutput_columnsの生成（Trino用に簡略化）
+    try:
+        root_operator.parse_columns_bottom_up({}, {}, {}, alias_dict={})
+    except (KeyError, ValueError) as e:
+        # Trinoの複雑なカラム名に対応するため、エラーを無視してoutput_columnsのみ生成
+        print(f"⚠️  parse_columns_bottom_upでエラー（無視）: {e}")
+        # 手動でoutput_columnsを生成
+        generate_output_columns_manually(root_operator)
     
     return root_operator
+
+
+def generate_output_columns_manually(node):
+    """手動でoutput_columnsを生成（Trino用）"""
+    # 現在のノードのoutput_columnsを生成
+    if 'layout' in node.plan_parameters:
+        layout = node.plan_parameters['layout']
+        if layout:
+            output_columns = node.parse_output_columns(','.join(layout))
+            node.plan_parameters['output_columns'] = output_columns
+    
+    # 子ノードも再帰的に処理
+    for child in node.children:
+        generate_output_columns_manually(child)
 
 
 def integrate_all_fragments(root_operator, all_fragment_operators):
