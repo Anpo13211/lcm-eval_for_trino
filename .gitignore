@@ -1,7 +1,6 @@
 .venv
 
 # Trino specific files
-accidents_valid_verbose.txt
 trino_table_stats.json
 
 # Python cache files

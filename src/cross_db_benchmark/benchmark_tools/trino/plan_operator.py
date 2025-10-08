@@ -477,22 +477,22 @@ class TrinoPlanOperator(dict):
     
     def _estimate_avg_width(self, column):
         """カラムの平均幅を推定"""
-        # Trinoではカラム統計を取得できないため、常に0を返す
+        # Trino の方でまだ未実装のため、一旦0を返す
         return 0
     
     def _estimate_correlation(self, column):
         """カラムの相関を推定"""
-        # Trinoではカラム統計を取得できないため、常に0を返す
+        # Trino の方でまだ未実装のため、一旦0を返す
         return 0
     
     def _estimate_n_distinct(self, column):
         """カラムの異なる値の数を推定"""
-        # Trinoではカラム統計を取得できないため、常に0を返す
+        # Trino の方でまだ未実装のため、一旦0を返す
         return 0
     
     def _estimate_null_frac(self, column):
         """カラムのNULL値の割合を推定"""
-        # Trinoではカラム統計を取得できないため、常に0を返す
+        # Trino の方でまだ未実装のため、一旦0を返す
         return 0
     
     def _parse_size(self, size_str):
