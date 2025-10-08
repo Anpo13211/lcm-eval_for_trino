@@ -174,52 +174,52 @@ class TrinoPlanOperator(dict):
         
         # 追加の行を解析
         for line in self.plain_content[1:]:
-            line = line.strip()
-            
+            stripped_line = line.strip()
+
             # Estimates情報を抽出
-            estimates_match = trino_estimates_regex.search(line)
+            estimates_match = trino_estimates_regex.search(stripped_line)
             if estimates_match:
                 # Estimatesの生の文字列を保存（reltuples推定用）
-                self.plan_parameters.update(dict(estimates=line))
+                self.plan_parameters.update(dict(estimates=stripped_line))
                 rows_str = estimates_match.group(1)
                 size_str = estimates_match.group(2)
                 cpu_str = estimates_match.group(3) if estimates_match.group(3) else None
                 memory_str = estimates_match.group(4) if estimates_match.group(4) else None
                 network_str = estimates_match.group(5) if estimates_match.group(5) else None
-                
+
                 # 行数を数値に変換
                 if rows_str == '?':
                     rows = 0
                 else:
                     rows = int(rows_str.replace(',', ''))
-                
+
                 # サイズをバイトに変換
                 if size_str == '?':
                     size_bytes = 0
                 else:
                     size_bytes = self._parse_size(size_str)
-                
+
                 # CPU値を数値に変換
                 if cpu_str == '?' or cpu_str is None:
                     est_cpu = 0
                 else:
                     est_cpu = self._parse_size(cpu_str)
-                
+
                 # Memory値を数値に変換
                 if memory_str == '?' or memory_str is None:
                     est_memory = 0
                 else:
                     est_memory = self._parse_size(memory_str)
-                
+
                 # Network値を数値に変換
                 if network_str == '?' or network_str is None:
                     est_network = 0
                 else:
                     est_network = self._parse_size(network_str)
-                
+
                 # 行幅を計算（サイズ / 行数）
                 est_width = size_bytes / rows if rows > 0 else 0
-                
+
                 self.plan_parameters.update({
                     'est_rows': rows,
                     'est_size': size_bytes,
@@ -228,48 +228,95 @@ class TrinoPlanOperator(dict):
                     'est_memory': est_memory,
                     'est_network': est_network
                 })
-        
-        # CPU時間を抽出
-        cpu_match = trino_cpu_regex.search(op_line)
-        if cpu_match:
-            cpu_time = self._parse_duration_to_ms(cpu_match.group(1), cpu_match.group(2))
-            self.plan_parameters.update(dict(act_cpu_time=cpu_time))
-        
-        # Scheduled時間を抽出
-        scheduled_match = trino_scheduled_regex.search(op_line)
-        if scheduled_match:
-            scheduled_time = self._parse_duration_to_ms(scheduled_match.group(1), scheduled_match.group(2))
-            self.plan_parameters.update(dict(act_scheduled_time=scheduled_time))
-        
-        # Blocked時間を抽出
-        blocked_match = trino_blocked_regex.search(op_line)
-        if blocked_match:
-            blocked_time = self._parse_duration_to_ms(blocked_match.group(1), blocked_match.group(2))
-            self.plan_parameters.update(dict(act_blocked_time=blocked_time))
-        
-        # Output情報を抽出
-        output_match = trino_output_regex.search(op_line)
-        if output_match:
-            output_rows = int(output_match.group(1).replace(',', ''))
-            output_size = self._parse_size(output_match.group(2))
-            self.plan_parameters.update({
-                'act_output_rows': output_rows,
-                'act_output_size': output_size
-            })
-        
-        # Input情報を抽出
-        input_match = trino_input_regex.search(op_line)
-        if input_match:
-            input_rows = int(input_match.group(1).replace(',', ''))
-            input_size = self._parse_size(input_match.group(2))
-            self.plan_parameters.update({
-                'act_input_rows': input_rows,
-                'act_input_size': input_size
-            })
-        
-        # その他のメトリクス情報
-        if 'metrics:' in op_line:
-            # メトリクス情報の解析（必要に応じて詳細化）
+
+            # 実測CPU時間を抽出（最初に見つかった値を優先）
+            if 'act_cpu_time' not in self.plan_parameters:
+                cpu_match = trino_cpu_regex.search(stripped_line)
+                if cpu_match:
+                    cpu_time = self._parse_duration_to_ms(cpu_match.group(1), cpu_match.group(2))
+                    self.plan_parameters.update(dict(act_cpu_time=cpu_time))
+
+            # Scheduled時間を抽出
+            if 'act_scheduled_time' not in self.plan_parameters:
+                scheduled_match = trino_scheduled_regex.search(stripped_line)
+                if scheduled_match:
+                    scheduled_time = self._parse_duration_to_ms(scheduled_match.group(1), scheduled_match.group(2))
+                    self.plan_parameters.update(dict(act_scheduled_time=scheduled_time))
+
+            # Blocked時間を抽出
+            if 'act_blocked_time' not in self.plan_parameters:
+                blocked_match = trino_blocked_regex.search(stripped_line)
+                if blocked_match:
+                    blocked_time = self._parse_duration_to_ms(blocked_match.group(1), blocked_match.group(2))
+                    self.plan_parameters.update(dict(act_blocked_time=blocked_time))
+
+            # Output情報を抽出
+            if 'act_output_rows' not in self.plan_parameters:
+                output_match = trino_output_regex.search(stripped_line)
+                if output_match:
+                    output_rows = int(output_match.group(1).replace(',', ''))
+                    output_size = self._parse_size(output_match.group(2))
+                    self.plan_parameters.update({
+                        'act_output_rows': output_rows,
+                        'act_output_size': output_size
+                    })
+
+            # Input情報を抽出
+            if 'act_input_rows' not in self.plan_parameters:
+                input_match = trino_input_regex.search(stripped_line)
+                if input_match:
+                    input_rows = int(input_match.group(1).replace(',', ''))
+                    input_size = self._parse_size(input_match.group(2))
+                    self.plan_parameters.update({
+                        'act_input_rows': input_rows,
+                        'act_input_size': input_size
+                    })
+
+            # その他のメトリクス情報
+            if 'has_metrics' not in self.plan_parameters and 'metrics:' in stripped_line:
+                # メトリクス情報の解析（必要に応じて詳細化）
+                self.plan_parameters.update(dict(has_metrics=True))
+
+        # op_line自体に含まれるメトリクスも考慮
+        if 'act_cpu_time' not in self.plan_parameters:
+            cpu_match = trino_cpu_regex.search(op_line)
+            if cpu_match:
+                cpu_time = self._parse_duration_to_ms(cpu_match.group(1), cpu_match.group(2))
+                self.plan_parameters.update(dict(act_cpu_time=cpu_time))
+
+        if 'act_scheduled_time' not in self.plan_parameters:
+            scheduled_match = trino_scheduled_regex.search(op_line)
+            if scheduled_match:
+                scheduled_time = self._parse_duration_to_ms(scheduled_match.group(1), scheduled_match.group(2))
+                self.plan_parameters.update(dict(act_scheduled_time=scheduled_time))
+
+        if 'act_blocked_time' not in self.plan_parameters:
+            blocked_match = trino_blocked_regex.search(op_line)
+            if blocked_match:
+                blocked_time = self._parse_duration_to_ms(blocked_match.group(1), blocked_match.group(2))
+                self.plan_parameters.update(dict(act_blocked_time=blocked_time))
+
+        if 'act_output_rows' not in self.plan_parameters:
+            output_match = trino_output_regex.search(op_line)
+            if output_match:
+                output_rows = int(output_match.group(1).replace(',', ''))
+                output_size = self._parse_size(output_match.group(2))
+                self.plan_parameters.update({
+                    'act_output_rows': output_rows,
+                    'act_output_size': output_size
+                })
+
+        if 'act_input_rows' not in self.plan_parameters:
+            input_match = trino_input_regex.search(op_line)
+            if input_match:
+                input_rows = int(input_match.group(1).replace(',', ''))
+                input_size = self._parse_size(input_match.group(2))
+                self.plan_parameters.update({
+                    'act_input_rows': input_rows,
+                    'act_input_size': input_size
+                })
+
+        if 'has_metrics' not in self.plan_parameters and 'metrics:' in op_line:
             self.plan_parameters.update(dict(has_metrics=True))
         
         # Estimates情報がない場合のデフォルト値設定
