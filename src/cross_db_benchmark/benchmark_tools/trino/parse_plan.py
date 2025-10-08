@@ -14,7 +14,7 @@ from cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOper
 from cross_db_benchmark.benchmark_tools.trino.utils import plan_statistics
 
 # Trino特有の正規表現パターン
-trino_timing_regex = re.compile(r'Queued: ([\d.]+)us, Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)(ms|s|m)?')
+trino_timing_regex = re.compile(r'Queued: ([\d.]+)(?:us|μs), Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)(ms|s|m|us|μs)?')
 trino_fragment_regex = re.compile(r'Fragment (\d+) \[(\w+)\]')
 trino_cpu_regex = re.compile(r'CPU: ([\d.]+)ms')
 trino_scheduled_regex = re.compile(r'Scheduled: ([\d.]+)ms')
@@ -37,7 +37,7 @@ def parse_trino_plan_simple(plan_text):
     for line in lines:
         timing_match = trino_timing_regex.search(line)
         if timing_match:
-            queued_time = float(timing_match.group(1)) / 1000  # us to ms
+            queued_time = float(timing_match.group(1)) / 1000  # us/μs to ms
             analysis_time = float(timing_match.group(2))
             planning_time = float(timing_match.group(3))
             execution_time = float(timing_match.group(4))
@@ -48,6 +48,8 @@ def parse_trino_plan_simple(plan_text):
                 execution_time = execution_time * 1000  # s to ms
             elif execution_unit == 'm':
                 execution_time = execution_time * 60000  # m to ms
+            elif execution_unit in ('us', 'μs'):
+                execution_time = execution_time / 1000  # us/μs to ms
             # execution_unit == 'ms' の場合はそのまま
             
             break
