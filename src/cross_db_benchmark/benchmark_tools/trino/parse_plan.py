@@ -14,7 +14,7 @@ from cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOper
 from cross_db_benchmark.benchmark_tools.trino.utils import plan_statistics
 
 # Trino特有の正規表現パターン
-trino_timing_regex = re.compile(r'Queued: ([\d.]+)us, Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)([ms]?)')
+trino_timing_regex = re.compile(r'Queued: ([\d.]+)us, Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)(ms|s|m)?')
 trino_fragment_regex = re.compile(r'Fragment (\d+) \[(\w+)\]')
 trino_cpu_regex = re.compile(r'CPU: ([\d.]+)ms')
 trino_scheduled_regex = re.compile(r'Scheduled: ([\d.]+)ms')
@@ -41,11 +41,14 @@ def parse_trino_plan_simple(plan_text):
             analysis_time = float(timing_match.group(2))
             planning_time = float(timing_match.group(3))
             execution_time = float(timing_match.group(4))
-            execution_unit = timing_match.group(5)
+            execution_unit = timing_match.group(5) if timing_match.group(5) else 'ms'
             
             # 実行時間の単位をミリ秒に統一
             if execution_unit == 's':
                 execution_time = execution_time * 1000  # s to ms
+            elif execution_unit == 'm':
+                execution_time = execution_time * 60000  # m to ms
+            # execution_unit == 'ms' の場合はそのまま
             
             break
     
