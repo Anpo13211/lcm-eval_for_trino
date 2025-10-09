@@ -191,14 +191,32 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
         if table_name not in table_idx:
             table_idx[table_name] = len(table_features)
             
+            # データベース統計情報からテーブル統計を取得
+            table_stats_dict = {}
+            if db_real_statistics and 'table_stats' in db_real_statistics:
+                if table_name in db_real_statistics['table_stats']:
+                    table_stats = db_real_statistics['table_stats'][table_name]
+                    # Trinoのテーブル統計をPostgres形式にマッピング
+                    table_stats_dict = {
+                        'reltuples': table_stats.get('row_count', 0),  # 行数
+                        'relpages': 0,  # Trinoではページ数は取得不可、ダミー値
+                    }
+            
             # テーブルの特徴量を抽出
             table_feat = []
             for feat_name in plan_featurization.VARIABLES['table']:
-                if feat_name in node.plan_parameters:
+                if feat_name in table_stats_dict:
+                    # 統計情報から取得
+                    value = table_stats_dict[feat_name]
+                    enc_value = encode(feat_name, table_stats_dict, feature_statistics)
+                    table_feat.append(enc_value)
+                elif feat_name in node.plan_parameters:
+                    # プランパラメータから取得
                     value = node.plan_parameters[feat_name]
                     enc_value = encode(feat_name, node.plan_parameters, feature_statistics)
                     table_feat.append(enc_value)
                 else:
+                    # 利用不可の場合は0
                     table_feat.append(0.0)
             
             table_features.append(table_feat)
