@@ -1,3 +1,19 @@
+"""
+Trino Zero-Shot Model Training Script
+
+Trinoクエリプラン向けのZero-Shotモデル（Graph Neural Network）のトレーニング。
+
+Usage:
+    # ルートディレクトリから実行
+    python -m trino_models.scripts.train_zeroshot \
+        --train_files accidents_valid_verbose.txt \
+        --test_file accidents_valid_verbose.txt \
+        --output_dir models/trino_zeroshot \
+        --statistics_dir datasets_statistics \
+        --catalog iceberg \
+        --schema imdb
+"""
+
 import sys
 import os
 
@@ -9,7 +25,12 @@ for i in range(11):
     if env_value in (None, '', 'None'):
         os.environ[env_key] = '[]'
 
-sys.path.append('src')
+# スクリプトがsrc/trino_models/scripts/にある場合、src/を親パスに追加
+from pathlib import Path
+script_dir = Path(__file__).resolve().parent
+src_dir = script_dir.parent.parent
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 import argparse
 import json
@@ -23,9 +44,8 @@ import numpy as np
 from tqdm import tqdm
 
 from cross_db_benchmark.benchmark_tools.trino.parse_plan import parse_trino_plans, trino_timing_regex
-from models.zeroshot.specific_models.trino_zero_shot import TrinoZeroShotModel
+from trino_models.models.zero_shot import TrinoZeroShotModel, trino_plan_collator, load_database_statistics
 from training.featurizations import TrinoTrueCardDetail
-from models.zeroshot.trino_plan_batching import trino_plan_collator, load_database_statistics
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
 from training.training.metrics import QError, RMSE

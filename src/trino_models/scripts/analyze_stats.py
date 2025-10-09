@@ -1,6 +1,12 @@
-#!/usr/bin/env python3
 """
-収集したTrino統計情報を分析し、zero-shot特徴量として使える情報を整理する
+Trino統計情報分析スクリプト
+
+collect_stats.pyで収集した統計情報を分析して、特徴量を抽出します。
+
+Usage:
+    # ルートディレクトリから実行
+    python -m trino_models.scripts.analyze_stats \
+        --stats_dir datasets_statistics/iceberg_imdb
 """
 
 import json

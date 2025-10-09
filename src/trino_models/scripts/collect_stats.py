@@ -1,9 +1,12 @@
-#!/usr/bin/env python3
 """
 Trinoからテーブルとカラムの統計情報を収集するスクリプト
 
 Usage:
-    python collect_trino_stats.py --catalog iceberg --schema imdb --tables name,cast_info
+    # ルートディレクトリから実行
+    python -m trino_models.scripts.collect_stats \
+        --catalog iceberg \
+        --schema imdb \
+        --tables name,cast_info
     
 統計情報は以下の構造で保存されます:
     datasets_statistics/
