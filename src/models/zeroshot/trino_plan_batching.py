@@ -1,4 +1,8 @@
 import collections
+import json
+import os
+from pathlib import Path
+from typing import Dict, Optional
 
 from cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOperator
 import dgl
@@ -10,6 +14,67 @@ from cross_db_benchmark.benchmark_tools.trino.parse_filter import PredicateNode
 from cross_db_benchmark.benchmark_tools.generate_workload import LogicalOperator
 from training.featurizations import Featurization
 from training.preprocessing.feature_statistics import FeatureType
+
+
+def load_database_statistics(
+    catalog: str, 
+    schema: str, 
+    stats_dir: str = 'datasets_statistics'
+) -> Dict[str, Dict]:
+    """
+    データベース統計情報を読み込む
+    
+    Args:
+        catalog: Trinoカタログ名
+        schema: スキーマ名
+        stats_dir: 統計情報のルートディレクトリ
+        
+    Returns:
+        {
+            'table_stats': {...},
+            'column_stats': {...},
+            'metadata': {...}
+        }
+    """
+    schema_dir = Path(stats_dir) / f"{catalog}_{schema}"
+    
+    if not schema_dir.exists():
+        print(f"⚠️  統計情報ディレクトリが見つかりません: {schema_dir}")
+        return {
+            'table_stats': {},
+            'column_stats': {},
+            'metadata': {}
+        }
+    
+    stats = {}
+    
+    # テーブル統計を読み込み
+    table_stats_file = schema_dir / 'table_stats.json'
+    if table_stats_file.exists():
+        with open(table_stats_file, 'r', encoding='utf-8') as f:
+            stats['table_stats'] = json.load(f)
+        print(f"✅ テーブル統計を読み込みました: {len(stats['table_stats'])} テーブル")
+    else:
+        stats['table_stats'] = {}
+    
+    # カラム統計を読み込み
+    column_stats_file = schema_dir / 'column_stats.json'
+    if column_stats_file.exists():
+        with open(column_stats_file, 'r', encoding='utf-8') as f:
+            stats['column_stats'] = json.load(f)
+        print(f"✅ カラム統計を読み込みました: {len(stats['column_stats'])} カラム")
+    else:
+        stats['column_stats'] = {}
+    
+    # メタデータを読み込み
+    metadata_file = schema_dir / 'metadata.json'
+    if metadata_file.exists():
+        with open(metadata_file, 'r', encoding='utf-8') as f:
+            stats['metadata'] = json.load(f)
+    else:
+        stats['metadata'] = {}
+    
+    return stats
 
 
 def encode(column, plan_params, feature_statistics):
@@ -44,7 +109,7 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
                   filter_to_plan_edges, predicate_col_features, output_column_to_plan_edges, output_column_features,
                   column_to_output_column_edges, column_features, table_features, table_to_plan_edges,
                   output_column_idx, column_idx, table_idx, plan_featurization: Featurization, predicate_depths, intra_predicate_edges,
-                  logical_preds, parent_node_id=None, depth=0):
+                  logical_preds, parent_node_id=None, depth=0, db_real_statistics=None):
     """
     Trinoプランをグラフに変換する
     
@@ -176,7 +241,7 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
                 column_node_id = column_idx.get(column_key)
 
                 if column_node_id is None:
-                    column_stats = lookup_stats(db_column_stats, column)
+                    column_stats = lookup_stats(db_column_stats, column, db_real_statistics)
                     column_params = as_dict(column_stats)
 
                     column_feat = []
@@ -206,6 +271,7 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
             intra_predicate_edges,
             logical_preds,
             plan_node_id=current_plan_id,
+            db_real_statistics=db_real_statistics,
         )
     
     # 子ノードを再帰的に処理
@@ -215,7 +281,7 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
                       output_column_features, column_to_output_column_edges, column_features, table_features,
                       table_to_plan_edges, output_column_idx, column_idx, table_idx,
                       plan_featurization, predicate_depths, intra_predicate_edges, logical_preds,
-                      parent_node_id=current_plan_id, depth=depth + 1)
+                      parent_node_id=current_plan_id, depth=depth + 1, db_real_statistics=db_real_statistics)
 
 
 def encode_or_zero(feature_name, params, feature_statistics):
@@ -258,20 +324,56 @@ def encode_or_zero(feature_name, params, feature_statistics):
         return 0.0
 
 
-def lookup_stats(stats_container, key):
-    """統計情報を取得するユーティリティ"""
-    if stats_container is None or key is None:
-        return None
-
-    if isinstance(stats_container, dict):
-        return stats_container.get(key)
-
-    if hasattr(stats_container, 'get'):
-        try:
-            return stats_container.get(key)
-        except Exception:
-            pass
-
+def lookup_stats(stats_container, key, db_statistics=None):
+    """
+    統計情報を取得するユーティリティ
+    
+    Args:
+        stats_container: 主要な統計情報ソース（従来のdb_column_stats等）
+        key: 検索キー（通常はカラム名のタプル）
+        db_statistics: データベース統計情報（load_database_statistics()の戻り値）
+    
+    Returns:
+        統計情報オブジェクトまたはNone
+    """
+    # 従来の統計情報から検索
+    if stats_container is not None and key is not None:
+        if isinstance(stats_container, dict):
+            result = stats_container.get(key)
+            if result is not None:
+                return result
+        
+        if hasattr(stats_container, 'get'):
+            try:
+                result = stats_container.get(key)
+                if result is not None:
+                    return result
+            except Exception:
+                pass
+    
+    # データベース統計情報から検索（フォールバック）
+    if db_statistics and 'column_stats' in db_statistics:
+        # keyがタプルの場合、table.column形式に変換
+        if isinstance(key, tuple) and len(key) >= 1:
+            # (table, column) または (column,) の形式を想定
+            if len(key) == 2:
+                lookup_key = f"{key[0]}.{key[1]}"
+            elif len(key) == 1:
+                # カラム名のみの場合、全テーブルから検索
+                column_name = key[0]
+                for full_col_name, col_stats in db_statistics['column_stats'].items():
+                    if col_stats.get('column') == column_name:
+                        # 統計情報を簡易オブジェクトに変換
+                        return type('ColumnStats', (), col_stats)
+                return None
+            else:
+                lookup_key = '.'.join(str(k) for k in key)
+            
+            if lookup_key in db_statistics['column_stats']:
+                # 統計情報を簡易オブジェクトに変換
+                col_stats = db_statistics['column_stats'][lookup_key]
+                return type('ColumnStats', (), col_stats)
+    
     return None
 
 
@@ -293,7 +395,7 @@ def predicate_to_dict(predicate):
 
 def parse_predicates(db_column_features, feature_statistics, filter_column, filter_to_plan_edges,
                      plan_featurization, predicate_col_features, predicate_depths, intra_predicate_edges,
-                     logical_preds, plan_node_id=None, parent_filter_node_id=None, depth=0):
+                     logical_preds, plan_node_id=None, parent_filter_node_id=None, depth=0, db_real_statistics=None):
     """述語ツリーを再帰的に解析して特徴量とエッジを構築する"""
     if filter_column is None:
         return
@@ -313,7 +415,7 @@ def parse_predicates(db_column_features, feature_statistics, filter_column, filt
 
     if not is_logical:
         column_id = filter_params.get('column')
-        column_stats = lookup_stats(db_column_features, column_id)
+        column_stats = lookup_stats(db_column_features, column_id, db_real_statistics)
         column_params = as_dict(column_stats)
         for feature_name in plan_featurization.COLUMN_FEATURES:
             curr_filter_features.append(encode_or_zero(feature_name, column_params, feature_statistics))
@@ -332,7 +434,7 @@ def parse_predicates(db_column_features, feature_statistics, filter_column, filt
         parse_predicates(db_column_features, feature_statistics, child_dict, filter_to_plan_edges,
                          plan_featurization, predicate_col_features, predicate_depths, intra_predicate_edges,
                          logical_preds, plan_node_id=plan_node_id, parent_filter_node_id=filter_node_id,
-                         depth=depth + 1)
+                         depth=depth + 1, db_real_statistics=db_real_statistics)
 
 
 def trino_plan_collator(plans, feature_statistics: dict = None, db_statistics: dict = None,
@@ -387,7 +489,7 @@ def trino_plan_collator(plans, feature_statistics: dict = None, db_statistics: d
                       feature_statistics, filter_to_plan_edges, filter_features, output_column_to_plan_edges,
                       output_column_features, column_to_output_column_edges, column_features, table_features,
                       table_to_plan_edges, output_column_idx, column_idx, table_idx,
-                      plan_featurization, predicate_depths, intra_predicate_edges, logical_preds)
+                      plan_featurization, predicate_depths, intra_predicate_edges, logical_preds, db_real_statistics=db_statistics)
     
     assert len(labels) == len(plans)
     assert len(plan_depths) == len(plan_features)

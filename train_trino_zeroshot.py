@@ -25,7 +25,7 @@ from tqdm import tqdm
 from cross_db_benchmark.benchmark_tools.trino.parse_plan import parse_trino_plans, trino_timing_regex
 from models.zeroshot.specific_models.trino_zero_shot import TrinoZeroShotModel
 from training.featurizations import TrinoTrueCardDetail
-from models.zeroshot.trino_plan_batching import trino_plan_collator
+from models.zeroshot.trino_plan_batching import trino_plan_collator, load_database_statistics
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
 from training.training.metrics import QError, RMSE
@@ -414,6 +414,12 @@ def main():
                         help='テスト用ファイルパス')
     parser.add_argument('--statistics_file', type=str, default=None,
                         help='特徴量統計情報ファイルのパス（オプション）')
+    parser.add_argument('--statistics_dir', type=str, default=None,
+                        help='データベース統計情報のルートディレクトリ（指定時のみ統計情報を使用）')
+    parser.add_argument('--catalog', type=str, default=None,
+                        help='Trinoカタログ名（統計情報使用時に必要）')
+    parser.add_argument('--schema', type=str, default=None,
+                        help='スキーマ名（統計情報使用時に必要）')
     
     # モデル関連の引数
     parser.add_argument('--output_dir', type=str, default='models/trino_zeroshot',
@@ -449,6 +455,38 @@ def main():
     print(f"Train files: {args.train_files}")
     print(f"Test file: {args.test_file}")
     print(f"Output directory: {args.output_dir}")
+    print()
+    
+    # データベース統計情報を読み込み（オプション）
+    db_statistics = None
+    if args.catalog and args.schema and args.statistics_dir:
+        stats_dir_path = Path(args.statistics_dir) / f"{args.catalog}_{args.schema}"
+        if stats_dir_path.exists():
+            print("📊 ステップ0: データベース統計情報の読み込み")
+            db_statistics = load_database_statistics(
+                catalog=args.catalog,
+                schema=args.schema,
+                stats_dir=args.statistics_dir
+            )
+            
+            # 統計情報の有無を確認
+            has_stats = (
+                db_statistics.get('table_stats') or 
+                db_statistics.get('column_stats')
+            )
+            
+            if has_stats:
+                print(f"✅ データベース統計情報が利用可能です")
+                print(f"   - テーブル統計: {len(db_statistics.get('table_stats', {}))} テーブル")
+                print(f"   - カラム統計: {len(db_statistics.get('column_stats', {}))} カラム")
+            print()
+        else:
+            print(f"ℹ️  統計情報ディレクトリが見つかりません: {stats_dir_path}")
+            print(f"   統計情報なしでトレーニングを続行します")
+            print()
+    else:
+        print(f"ℹ️  統計情報が指定されていません。ダミー統計でトレーニングを続行します")
+        print()
     print(f"Epochs: {args.epochs}")
     print(f"Batch size: {args.batch_size}")
     print(f"Learning rate: {args.lr}")

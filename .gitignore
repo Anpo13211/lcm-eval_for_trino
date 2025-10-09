@@ -2,6 +2,11 @@
 
 # Trino specific files
 trino_table_stats.json
+trino_statistics.json
+accidents_valid_verbose.txt
+
+# Database statistics
+datasets_statistics/
 
 # Python cache files
 __pycache__/
