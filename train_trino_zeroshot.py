@@ -539,7 +539,10 @@ def main():
             args.statistics_file
         )
     
-    db_statistics = {}  # データベース統計は空（無視）
+    # db_statisticsがNoneの場合は空の辞書を使用（後方互換性）
+    if db_statistics is None:
+        db_statistics = {}
+    
     print()
     
     # 4. データセットとDataLoaderの作成
