@@ -5,7 +5,7 @@ collect_stats.pyで収集した統計情報を分析して、特徴量を抽出�
 
 Usage:
     # ルートディレクトリから実行
-    python -m trino_models.scripts.analyze_stats \
+    python -m trino_lcm.scripts.analyze_stats \
         --stats_dir datasets_statistics/iceberg_imdb
 """
 

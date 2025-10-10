@@ -6,7 +6,7 @@ Trino Flat-Vector Model Prediction Script
 
 Usage:
     # ルートディレクトリから実行
-    python -m trino_models.scripts.predict_flat_vector \
+    python -m trino_lcm.scripts.predict_flat_vector \
         --model_dir models/trino_flat_vector \
         --input_file accidents_valid_verbose.txt \
         --output_file predictions.json \
@@ -27,13 +27,13 @@ for i in range(11):
     if env_value in (None, '', 'None'):
         os.environ[env_key] = '[]'
 
-# スクリプトがsrc/trino_models/scripts/にある場合、src/を親パスに追加
+# スクリプトがsrc/trino_lcm/scripts/にある場合、src/を親パスに追加
 script_dir = Path(__file__).resolve().parent
 src_dir = script_dir.parent.parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from trino_models.models.flat_vector import (
+from trino_lcm.models.flat_vector import (
     load_trino_plans_from_files,
     create_flat_vector_dataset,
     predict_flat_vector_model

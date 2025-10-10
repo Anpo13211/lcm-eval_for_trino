@@ -5,7 +5,7 @@
 ## 📁 ディレクトリ構成
 
 ```
-src/trino_models/
+src/trino_lcm/
 ├── models/                      # モデル実装
 │   ├── flat_vector/
 │   │   ├── __init__.py
@@ -42,7 +42,7 @@ Flat-Vectorモデルは、クエリプランツリーを平坦化して、各演
 #### 1. トレーニング
 
 ```bash
-PYTHONPATH=src python -m trino_models.scripts.train_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.train_flat_vector \
     --train_files accidents_valid_verbose.txt \
     --test_file accidents_valid_verbose.txt \
     --output_dir models/trino_flat_vector \
@@ -67,7 +67,7 @@ PYTHONPATH=src python -m trino_models.scripts.train_flat_vector \
 #### 2. 予測
 
 ```bash
-PYTHONPATH=src python -m trino_models.scripts.predict_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.predict_flat_vector \
     --model_dir models/trino_flat_vector \
     --input_file new_queries.txt \
     --output_file predictions.json \
@@ -86,7 +86,7 @@ PYTHONPATH=src python -m trino_models.scripts.predict_flat_vector \
 #### 3. モデル情報の表示
 
 ```bash
-PYTHONPATH=src python -m trino_models.scripts.inspect_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.inspect_flat_vector \
     --model_dir models/trino_flat_vector \
     --seed 42
 ```
@@ -142,13 +142,13 @@ PYTHONPATH=src python -m trino_models.scripts.inspect_flat_vector \
 
 ```bash
 # 1. Trinoから統計情報を収集（オプション）
-PYTHONPATH=src python -m trino_models.scripts.collect_stats \
+PYTHONPATH=src python -m trino_lcm.scripts.collect_stats \
     --catalog iceberg \
     --schema imdb \
     --output-dir datasets_statistics
 
 # 2. モデルのトレーニング
-PYTHONPATH=src python -m trino_models.scripts.train_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.train_flat_vector \
     --train_files accidents_valid_verbose.txt \
     --test_file accidents_valid_verbose.txt \
     --output_dir models/trino_flat_vector \
@@ -156,7 +156,7 @@ PYTHONPATH=src python -m trino_models.scripts.train_flat_vector \
     --seed 42
 
 # 3. 新しいクエリの予測
-PYTHONPATH=src python -m trino_models.scripts.predict_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.predict_flat_vector \
     --model_dir models/trino_flat_vector \
     --input_file new_queries.txt \
     --output_file predictions.json \
@@ -164,7 +164,7 @@ PYTHONPATH=src python -m trino_models.scripts.predict_flat_vector \
     --seed 42
 
 # 4. モデル情報の表示
-PYTHONPATH=src python -m trino_models.scripts.inspect_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.inspect_flat_vector \
     --model_dir models/trino_flat_vector \
     --seed 42
 ```

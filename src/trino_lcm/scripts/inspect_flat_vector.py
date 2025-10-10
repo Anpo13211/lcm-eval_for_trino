@@ -6,7 +6,7 @@ Trino Flat-Vector Model Inspector
 
 Usage:
     # ルートディレクトリから実行
-    python -m trino_models.scripts.inspect_flat_vector \
+    python -m trino_lcm.scripts.inspect_flat_vector \
         --model_dir models/trino_flat_vector --seed 42
 """
 
@@ -23,7 +23,7 @@ for i in range(11):
     if env_value in (None, '', 'None'):
         os.environ[env_key] = '[]'
 
-# スクリプトがsrc/trino_models/scripts/にある場合、src/を親パスに追加
+# スクリプトがsrc/trino_lcm/scripts/にある場合、src/を親パスに追加
 script_dir = Path(__file__).resolve().parent
 src_dir = script_dir.parent.parent
 if str(src_dir) not in sys.path:

@@ -3,7 +3,7 @@ Trinoからテーブルとカラムの統計情報を収集するスクリプト
 
 Usage:
     # ルートディレクトリから実行
-    python -m trino_models.scripts.collect_stats \
+    python -m trino_lcm.scripts.collect_stats \
         --catalog iceberg \
         --schema imdb \
         --tables name,cast_info

@@ -7,7 +7,7 @@
 ```
 lcm-eval_for_trino/
 ├── src/
-│   ├── trino_models/           # 🆕 Trino専用実装（すべてここに集約）
+│   ├── trino_lcm/              # 🆕 Trino専用実装（すべてここに集約）
 │   │   ├── models/             # モデル実装
 │   │   │   ├── flat_vector/    # Flat-Vectorモデル
 │   │   │   │   ├── __init__.py
@@ -37,7 +37,7 @@ lcm-eval_for_trino/
 
 ### 1. Flat-Vector Model（PostgreSQL版の再実装）
 
-**場所**: `src/trino_models/`
+**場所**: `src/trino_lcm/`
 
 クエリプランを平坦化して、演算子タイプごとに出現回数とカーディナリティを集計し、
 LightGBMで実行時間を予測するシンプルなモデル。
@@ -45,21 +45,21 @@ LightGBMで実行時間を予測するシンプルなモデル。
 **使用方法**:
 ```bash
 # トレーニング
-PYTHONPATH=src python -m trino_models.scripts.train_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.train_flat_vector \
     --train_files accidents_valid_verbose.txt \
     --test_file accidents_valid_verbose.txt \
     --output_dir models/trino_flat_vector \
     --use_act_card
 
 # 予測
-PYTHONPATH=src python -m trino_models.scripts.predict_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.predict_flat_vector \
     --model_dir models/trino_flat_vector \
     --input_file new_queries.txt \
     --output_file predictions.json \
     --use_act_card
 
 # モデル情報表示
-PYTHONPATH=src python -m trino_models.scripts.inspect_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.inspect_flat_vector \
     --model_dir models/trino_flat_vector
 ```
 
@@ -69,11 +69,11 @@ PYTHONPATH=src python -m trino_models.scripts.inspect_flat_vector \
 - ✅ 既存のメトリクス（Q-Error, RMSE, MAPE）を使用
 - ✅ PostgreSQL版と同じアーキテクチャ
 
-**詳細**: `src/trino_models/scripts/README.md`を参照
+**詳細**: `src/trino_lcm/scripts/README.md`を参照
 
 ### 2. Zero-Shot Model（Graph Neural Network）
 
-**場所**: `src/trino_models/`
+**場所**: `src/trino_lcm/`
 
 グラフニューラルネットワークを使用した高精度なモデル。
 プランの詳細な構造とデータベース統計情報を活用。
@@ -81,7 +81,7 @@ PYTHONPATH=src python -m trino_models.scripts.inspect_flat_vector \
 **使用方法**:
 ```bash
 # トレーニング
-PYTHONPATH=src python -m trino_models.scripts.train_zeroshot \
+PYTHONPATH=src python -m trino_lcm.scripts.train_zeroshot \
     --train_files accidents_valid_verbose.txt \
     --test_file accidents_valid_verbose.txt \
     --output_dir models/trino_zeroshot \
@@ -123,7 +123,7 @@ PYTHONPATH=src python -m trino_models.scripts.train_zeroshot \
 ### 1. 統計情報の収集
 
 ```bash
-PYTHONPATH=src python -m trino_models.scripts.collect_stats \
+PYTHONPATH=src python -m trino_lcm.scripts.collect_stats \
     --catalog iceberg \
     --schema imdb \
     --output-dir datasets_statistics
@@ -143,7 +143,7 @@ SELECT * FROM your_table WHERE condition;
 ### 3. 統計情報の分析
 
 ```bash
-PYTHONPATH=src python -m trino_models.scripts.analyze_stats \
+PYTHONPATH=src python -m trino_lcm.scripts.analyze_stats \
     --stats_dir datasets_statistics/iceberg_imdb
 ```
 
@@ -151,27 +151,27 @@ PYTHONPATH=src python -m trino_models.scripts.analyze_stats \
 
 ```bash
 # 1. 統計情報の収集
-PYTHONPATH=src python -m trino_models.scripts.collect_stats \
+PYTHONPATH=src python -m trino_lcm.scripts.collect_stats \
     --catalog iceberg \
     --schema imdb \
     --output-dir datasets_statistics
 
 # 2. Flat-Vectorモデルのトレーニング
-PYTHONPATH=src python -m trino_models.scripts.train_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.train_flat_vector \
     --train_files train_plans.txt \
     --test_file test_plans.txt \
     --output_dir models/trino_flat_vector \
     --use_act_card
 
 # 3. 予測
-PYTHONPATH=src python -m trino_models.scripts.predict_flat_vector \
+PYTHONPATH=src python -m trino_lcm.scripts.predict_flat_vector \
     --model_dir models/trino_flat_vector \
     --input_file new_queries.txt \
     --output_file predictions.json \
     --use_act_card
 
 # 4. Zero-Shotモデルのトレーニング（より高精度）
-PYTHONPATH=src python -m trino_models.scripts.train_zeroshot \
+PYTHONPATH=src python -m trino_lcm.scripts.train_zeroshot \
     --train_files train_plans.txt \
     --test_file test_plans.txt \
     --output_dir models/trino_zeroshot \
@@ -182,7 +182,7 @@ PYTHONPATH=src python -m trino_models.scripts.train_zeroshot \
 
 ## 📚 ドキュメント
 
-- **Flat-Vectorモデル詳細**: `src/trino_models/scripts/README.md`
+- **Flat-Vectorモデル詳細**: `src/trino_lcm/scripts/README.md`
 - **メインREADME**: `README.md`（元のlcm-evalプロジェクト）
 
 ## 💡 実行方法
@@ -190,7 +190,7 @@ PYTHONPATH=src python -m trino_models.scripts.train_zeroshot \
 すべてのスクリプトは、ルートディレクトリから以下の形式で実行します：
 
 ```bash
-PYTHONPATH=src python -m trino_models.scripts.<script_name> [options]
+PYTHONPATH=src python -m trino_lcm.scripts.<script_name> [options]
 ```
 
 **利用可能なスクリプト**:
