@@ -16,8 +16,8 @@ __pycache__/
 .Python
 *.so
 
-# Model files
-models/
+# Model files (trained models in root directory only)
+/models/
 *.pt
 *.pth
 
