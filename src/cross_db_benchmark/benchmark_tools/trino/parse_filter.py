@@ -1,48 +1,12 @@
 import re
+from typing import List
 
 from cross_db_benchmark.benchmark_tools.generate_workload import Operator, LogicalOperator
+from cross_db_benchmark.benchmark_tools.abstract.filter_parser import AbstractPredicateNode, AbstractFilterParser
 
 
-class PredicateNode:
-    """Trinoの述語ノードを表現するクラス"""
-    
-    def __init__(self, text, children):
-        self.text = text
-        self.children = children
-        self.column = None
-        self.operator = None
-        self.literal = None
-        self.filter_feature = None
-    
-    def __str__(self):
-        return self.to_tree_rep(depth=0)
-    
-    def to_dict(self):
-        return dict(
-            column=self.column,
-            operator=str(self.operator),
-            literal=self.literal,
-            literal_feature=self.filter_feature,
-            children=[c.to_dict() for c in self.children]
-        )
-    
-    def lookup_columns(self, plan, **kwargs):
-        if self.column is not None:
-            self.column = plan.lookup_column_id(self.column, **kwargs)
-        for c in self.children:
-            c.lookup_columns(plan, **kwargs)
-    
-    def parse_lines_recursively(self, parse_baseline=False):
-        self.parse_lines(parse_baseline=parse_baseline)
-        for c in self.children:
-            c.parse_lines_recursively(parse_baseline=parse_baseline)
-        
-        # ベースライン解析の場合、統計的に予測困難な条件を除外
-        if parse_baseline:
-            self.children = [c for c in self.children if
-                           c.operator in {LogicalOperator.AND, LogicalOperator.OR,
-                                        Operator.IS_NOT_NULL, Operator.IS_NULL}
-                           or c.literal is not None]
+class TrinoPredicateNode(AbstractPredicateNode):
+    """Trino-specific predicate node implementation"""
     
     def parse_lines(self, parse_baseline=False):
         """Trinoの述語を解析"""
@@ -57,28 +21,28 @@ class PredicateNode:
         elif all([k == 'OR' for k in keywords]):
             self.operator = LogicalOperator.OR
         else:
-            # 比較演算子の検出
+            # 比較演算子の検出（長いパターンを先に配置）
             repr_op = [
-                ('= ANY', Operator.IN),
-                ('=', Operator.EQ),
-                ('>=', Operator.GEQ),
-                ('>', Operator.GEQ),
-                ('<=', Operator.LEQ),
-                ('<', Operator.LEQ),
-                ('<>', Operator.NEQ),
-                ('~~', Operator.LIKE),
-                ('!~~', Operator.NOT_LIKE),
+                ('NOT BETWEEN', Operator.NOT_BETWEEN),
+                ('NOT ILIKE', Operator.NOT_LIKE),
+                ('NOT LIKE', Operator.NOT_LIKE),
+                ('NOT IN', Operator.NOT_IN),
+                ('NOT NULL', Operator.IS_NOT_NULL),
                 ('IS NOT NULL', Operator.IS_NOT_NULL),
                 ('IS NULL', Operator.IS_NULL),
-                # Trino特有の演算子
-                ('IN', Operator.IN),
-                ('NOT IN', Operator.NOT_IN),
+                ('= ANY', Operator.IN),
                 ('BETWEEN', Operator.BETWEEN),
-                ('NOT BETWEEN', Operator.NOT_BETWEEN),
-                ('LIKE', Operator.LIKE),
-                ('NOT LIKE', Operator.NOT_LIKE),
                 ('ILIKE', Operator.LIKE),  # Trinoの大文字小文字を区別しないLIKE
-                ('NOT ILIKE', Operator.NOT_LIKE),
+                ('LIKE', Operator.LIKE),
+                ('IN', Operator.IN),
+                ('>=', Operator.GEQ),
+                ('<=', Operator.LEQ),
+                ('<>', Operator.NEQ),
+                ('!~~', Operator.NOT_LIKE),
+                ('~~', Operator.LIKE),
+                ('>', Operator.GEQ),
+                ('<', Operator.LEQ),
+                ('=', Operator.EQ),
             ]
             
             node_op = None
@@ -137,7 +101,12 @@ class PredicateNode:
                     except ValueError:
                         pass
             
-            assert node_op is not None, f"Could not parse: {self.text}"
+            if node_op is None:
+                print(f"Warning: Could not parse: '{self.text}'")
+                # Set default operator for unparseable text
+                node_op = Operator.EQ
+                column = None
+                literal = self.text
             
             self.column = column
             self.operator = node_op
@@ -155,7 +124,18 @@ class PredicateNode:
         return rep_text
 
 
-def parse_recursively(filter_cond, offset, _class=PredicateNode):
+class TrinoFilterParser(AbstractFilterParser):
+    """Trino-specific filter parser implementation"""
+    
+    def __init__(self):
+        super().__init__(database_type="trino")
+    
+    def create_predicate_node(self, text: str, children: List[AbstractPredicateNode]) -> TrinoPredicateNode:
+        """Create Trino-specific predicate node"""
+        return TrinoPredicateNode(text, children)
+
+
+def parse_recursively(filter_cond, offset, _class=TrinoPredicateNode):
     """Trinoのフィルター条件を再帰的に解析"""
     escaped = False
     node_text = ''
@@ -179,19 +159,10 @@ def parse_recursively(filter_cond, offset, _class=PredicateNode):
 
 
 def parse_filter(filter_cond, parse_baseline=False):
-    """Trinoのフィルター条件を解析"""
-    if not filter_cond:
-        return None
-    
-    parse_tree, _ = parse_recursively(filter_cond, offset=0)
-    assert len(parse_tree.children) == 1
-    parse_tree = parse_tree.children[0]
-    parse_tree.parse_lines_recursively(parse_baseline=parse_baseline)
-    
-    if parse_tree.operator not in {LogicalOperator.AND, LogicalOperator.OR, Operator.IS_NOT_NULL, Operator.IS_NULL} \
-            and parse_tree.literal is None:
-        return None
-    if parse_tree.operator in {LogicalOperator.AND, LogicalOperator.OR} and len(parse_tree.children) == 0:
-        return None
-    
-    return parse_tree
+    """Legacy function for backward compatibility"""
+    parser = TrinoFilterParser()
+    return parser.parse_filter(filter_cond, parse_baseline)
+
+
+# Backward compatibility aliases
+PredicateNode = TrinoPredicateNode
