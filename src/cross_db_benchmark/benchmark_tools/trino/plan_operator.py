@@ -376,34 +376,6 @@ class TrinoPlanOperator(AbstractPlanOperator):
         self.plan_parameters['act_children_card'] = 1.0
         self.plan_parameters['est_children_card'] = 1.0
     
-    def parse_columns_bottom_up(self, column_id_mapping, partial_column_name_mapping, table_id_mapping, **kwargs):
-        """ボトムアップでカラム情報を統計情報と照合"""
-        # 子ノードを先に処理
-        node_tables = set()
-        for child in self.children:
-            if hasattr(child, 'parse_columns_bottom_up'):
-                child_tables = child.parse_columns_bottom_up(
-                    column_id_mapping, partial_column_name_mapping, table_id_mapping, **kwargs
-                )
-                node_tables.update(child_tables)
-        
-        # 子ノードのカーディナリティを計算
-        if self.children:
-            act_cards = [child.act_card for child in self.children if hasattr(child, 'act_card')]
-            est_cards = [child.est_card for child in self.children if hasattr(child, 'est_card')]
-            
-            if act_cards:
-                self.plan_parameters['act_children_card'] = math.prod(act_cards)
-            if est_cards:
-                self.plan_parameters['est_children_card'] = math.prod(est_cards)
-        
-        # テーブル情報を追加
-        if 'table' in self.plan_parameters:
-            table_name = self.plan_parameters['table']
-            node_tables.add(table_name)
-        
-        return node_tables
-    
     def _get_reltuples_with_fallback(self):
         """フォールバック戦略付きでreltuplesを取得"""
         # 戦略1: Estimatesから抽出を試行
