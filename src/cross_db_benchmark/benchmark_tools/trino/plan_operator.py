@@ -1,9 +1,10 @@
 import math
 import re
 
-from cross_db_benchmark.benchmark_tools.generate_workload import Aggregator, ExtendedAggregator, LogicalOperator
-from cross_db_benchmark.benchmark_tools.trino.parse_filter import parse_filter, PredicateNode
-from cross_db_benchmark.benchmark_tools.trino.utils import child_prod
+from src.cross_db_benchmark.benchmark_tools.abstract.plan_operator import AbstractPlanOperator
+from src.cross_db_benchmark.benchmark_tools.generate_workload import Aggregator, ExtendedAggregator, LogicalOperator
+from src.cross_db_benchmark.benchmark_tools.trino.parse_filter import parse_filter, PredicateNode
+from src.cross_db_benchmark.benchmark_tools.trino.utils import child_prod
 
 # Trino特有の正規表現パターン
 trino_estimates_regex = re.compile(r'Estimates: \{rows: ([\d,?]+) \(([\d.?]+[KMG]?B?)\)(?:, cpu: ([\d.?]+[KMG]?)?)?(?:, memory: ([\d.?]+[KMG]?B?))?(?:, network: ([\d.?]+[KMG]?B?))?\}')
@@ -22,16 +23,12 @@ trino_constraints_regex = re.compile(r'constraints=\[([^\]]+)\]')
 literal_regex = re.compile(r"(\'[^\']+\'::[^\'\)]+)")
 
 
-class TrinoPlanOperator(dict):
+class TrinoPlanOperator(AbstractPlanOperator):
     """Trinoプラン演算子を表現するクラス"""
     
-    def __init__(self, plain_content, children=None, plan_parameters=None, plan_runtime=0):
-        super().__init__()
-        self.__dict__ = self
-        self.plain_content = plain_content
-        self.plan_parameters = plan_parameters if plan_parameters is not None else dict()
-        self.children = list(children) if children is not None else []
-        self.plan_runtime = plan_runtime
+    def __init__(self, plain_content=None, children=None, plan_parameters=None, plan_runtime=0):
+        super().__init__(plain_content, children, plan_parameters, plan_runtime)
+        self.database_type = "trino"
     
     def _parse_duration_to_ms(self, value_str, unit_str):
         """時間表現をミリ秒に変換"""
@@ -73,7 +70,8 @@ class TrinoPlanOperator(dict):
             # 演算子名をクリーンアップ
             if '[' in op_name:
                 op_name = op_name.split('[')[0]
-            self.plan_parameters.update(dict(op_name=op_name))
+            # ★ 統一インターフェースに格納
+            self.plan_parameters['op_name'] = op_name
         
         # テーブル情報を抽出
         if 'table = ' in op_line:
@@ -344,6 +342,67 @@ class TrinoPlanOperator(dict):
             
             # カラム統計の推定
             self._estimate_column_stats()
+        
+        # ★ Trino固有の特徴量を統一インターフェースにマッピング
+        self._map_to_unified_interface()
+    
+    def _map_to_unified_interface(self):
+        """Trino固有の特徴量を統一インターフェースにマッピング"""
+        # est_rows → est_card
+        if 'est_rows' in self.plan_parameters:
+            self.plan_parameters['est_card'] = self.plan_parameters['est_rows']
+        
+        # act_output_rows → act_card
+        if 'act_output_rows' in self.plan_parameters:
+            self.plan_parameters['act_card'] = self.plan_parameters['act_output_rows']
+        
+        # est_width は既に設定済み
+        if 'est_width' not in self.plan_parameters:
+            self.plan_parameters['est_width'] = 0.0
+        
+        # workers_planned は Trino では通常 0
+        if 'workers_planned' not in self.plan_parameters:
+            self.plan_parameters['workers_planned'] = 0
+        
+        # Trino には est_cost がないので None
+        self.plan_parameters['est_cost'] = None
+        self.plan_parameters['est_startup_cost'] = None
+        
+        # act_time は CPU時間から推定
+        if 'act_cpu_time' in self.plan_parameters:
+            self.plan_parameters['act_time'] = self.plan_parameters['act_cpu_time']
+        
+        # 子ノードのカーディナリティは後で計算される
+        self.plan_parameters['act_children_card'] = 1.0
+        self.plan_parameters['est_children_card'] = 1.0
+    
+    def parse_columns_bottom_up(self, column_id_mapping, partial_column_name_mapping, table_id_mapping, **kwargs):
+        """ボトムアップでカラム情報を統計情報と照合"""
+        # 子ノードを先に処理
+        node_tables = set()
+        for child in self.children:
+            if hasattr(child, 'parse_columns_bottom_up'):
+                child_tables = child.parse_columns_bottom_up(
+                    column_id_mapping, partial_column_name_mapping, table_id_mapping, **kwargs
+                )
+                node_tables.update(child_tables)
+        
+        # 子ノードのカーディナリティを計算
+        if self.children:
+            act_cards = [child.act_card for child in self.children if hasattr(child, 'act_card')]
+            est_cards = [child.est_card for child in self.children if hasattr(child, 'est_card')]
+            
+            if act_cards:
+                self.plan_parameters['act_children_card'] = math.prod(act_cards)
+            if est_cards:
+                self.plan_parameters['est_children_card'] = math.prod(est_cards)
+        
+        # テーブル情報を追加
+        if 'table' in self.plan_parameters:
+            table_name = self.plan_parameters['table']
+            node_tables.add(table_name)
+        
+        return node_tables
     
     def _get_reltuples_with_fallback(self):
         """フォールバック戦略付きでreltuplesを取得"""

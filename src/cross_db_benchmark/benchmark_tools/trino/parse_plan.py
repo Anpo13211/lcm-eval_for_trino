@@ -9,9 +9,10 @@ except ImportError:
     def tqdm(iterable, *args, **kwargs):
         return iterable
 
-from cross_db_benchmark.benchmark_tools.generate_workload import LogicalOperator
-from cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOperator
-from cross_db_benchmark.benchmark_tools.trino.utils import plan_statistics
+from src.cross_db_benchmark.benchmark_tools.abstract.plan_parser import AbstractPlanParser
+from src.cross_db_benchmark.benchmark_tools.generate_workload import LogicalOperator
+from src.cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOperator
+from src.cross_db_benchmark.benchmark_tools.trino.utils import plan_statistics
 
 # Trino特有の正規表現パターン
 trino_timing_regex = re.compile(r'Queued: ([\d.]+)(?:us|μs), Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)(ms|s|m|us|μs)?')
@@ -22,6 +23,136 @@ trino_blocked_regex = re.compile(r'Blocked ([\d.]+)s \(Input: ([\d.]+)s, Output:
 trino_input_regex = re.compile(r'Input: ([\d,]+) rows \(([\d.]+[KMG]?B)\)')
 trino_output_regex = re.compile(r'Output: ([\d,]+) rows \(([\d.]+[KMG]?B)\)')
 trino_estimates_regex = re.compile(r'Estimates: \{rows: ([\d,?]+) \(([\d.]+[KMG]?B)\)(?:, cpu: ([\d.]+[KMG]?)?)?(?:, memory: ([\d.]+[KMG]?B))?(?:, network: ([\d.]+[KMG]?B))?\}')
+
+
+class TrinoPlanParser(AbstractPlanParser):
+    """Trinoプランパーサー"""
+    
+    def __init__(self):
+        super().__init__(database_type="trino")
+    
+    def parse_plans(self, run_stats, min_runtime=100, max_runtime=30000, parse_baseline=False, cap_queries=None,
+                   parse_join_conds=False, include_zero_card=False, explain_only=False, **kwargs):
+        """Trinoプランを一括解析"""
+        
+        # 統計情報の初期化
+        parsed_plans = []
+        avg_runtimes = []
+        no_tables = []
+        no_filters = []
+        op_perc = collections.defaultdict(int)
+        database_stats = {}
+        
+        # クエリ数の制限
+        query_list = run_stats.query_list
+        if cap_queries:
+            query_list = query_list[:cap_queries]
+        
+        for q in tqdm(query_list):
+            # タイムアウトクエリをスキップ
+            if hasattr(q, 'timeout') and q.timeout:
+                continue
+            
+            # プランが存在しない場合はスキップ
+            if not hasattr(q, 'verbose_plan') or not q.verbose_plan:
+                continue
+            
+            # 実行時間の確認
+            if hasattr(q, 'execution_time') and q.execution_time < min_runtime:
+                continue
+            
+            if hasattr(q, 'execution_time') and q.execution_time > max_runtime:
+                continue
+            
+            try:
+                # プランテキストを結合
+                plan_lines = []
+                for l in q.verbose_plan:
+                    if isinstance(l, (list, tuple)) and len(l) > 0:
+                        plan_lines.append(l[0])
+                    elif isinstance(l, str):
+                        plan_lines.append(l)
+                    else:
+                        plan_lines.append('')
+                
+                plan_text = '\n'.join(plan_lines)
+                
+                # プランを解析
+                root_operator, execution_time, planning_time = parse_trino_raw_plan_v2(
+                    plan_text, analyze=True, parse=True
+                )
+                
+                if root_operator is None:
+                    continue
+                
+                # プラン統計を計算
+                stats = plan_statistics(root_operator)
+                
+                # プラン情報を構築
+                plan_info = {
+                    'root_operator': root_operator,
+                    'execution_time': execution_time,
+                    'planning_time': planning_time,
+                    'stats': stats,
+                    'query_id': getattr(q, 'query_id', len(parsed_plans)),
+                    'sql': getattr(q, 'sql', ''),
+                }
+                
+                # TrinoPlanOperatorオブジェクトにplan_runtimeを設定
+                root_operator.plan_runtime = execution_time
+                root_operator.database_id = getattr(q, 'database_id', 'unknown')
+                
+                parsed_plans.append(root_operator)
+                avg_runtimes.append(execution_time)
+                
+                # 統計情報を更新
+                if stats['no_tables'] == 0:
+                    no_tables.append(len(parsed_plans) - 1)
+                
+                if stats['no_filters'] == 0:
+                    no_filters.append(len(parsed_plans) - 1)
+                
+                # 演算子統計を更新
+                for op_name in stats['operators']:
+                    op_perc[op_name] += 1
+                    
+            except Exception as e:
+                print(f"Error parsing query {getattr(q, 'query_id', 'unknown')}: {e}")
+                continue
+        
+        # 結果を構築（統一フォーマット）
+        parsed_runs = {
+            'parsed_plans': parsed_plans,
+            'database_stats': getattr(run_stats, 'database_stats', {}),
+            'run_kwargs': getattr(run_stats, 'run_kwargs', {})
+        }
+        
+        # 統計情報を構築
+        stats = {
+            'runtimes': str(avg_runtimes),
+            'no_tables': str(no_tables),
+            'no_filters': str(no_filters),
+            'total_plans': len(parsed_plans),
+            'avg_runtime': np.mean(avg_runtimes) if avg_runtimes else 0,
+            'min_runtime': np.min(avg_runtimes) if avg_runtimes else 0,
+            'max_runtime': np.max(avg_runtimes) if avg_runtimes else 0,
+            'no_tables_count': len(no_tables),
+            'no_filters_count': len(no_filters),
+            'operator_percentages': dict(op_perc)
+        }
+        
+        return parsed_runs, stats
+    
+    def parse_single_plan(self, plan_text, analyze=True, parse=True, **kwargs):
+        """単一のTrinoプランを解析"""
+        try:
+            root_operator, execution_time, planning_time = parse_trino_raw_plan_v2(
+                plan_text, analyze=analyze, parse=parse
+            )
+            return root_operator
+        except Exception as e:
+            print(f"Error parsing single plan: {e}")
+            return None
 
 
 def parse_trino_plan_simple(plan_text):
