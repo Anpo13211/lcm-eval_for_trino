@@ -9,10 +9,10 @@ except ImportError:
     def tqdm(iterable, *args, **kwargs):
         return iterable
 
-from src.cross_db_benchmark.benchmark_tools.abstract.plan_parser import AbstractPlanParser
-from src.cross_db_benchmark.benchmark_tools.generate_workload import LogicalOperator
-from src.cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOperator
-from src.cross_db_benchmark.benchmark_tools.trino.utils import plan_statistics
+from cross_db_benchmark.benchmark_tools.abstract.plan_parser import AbstractPlanParser
+from cross_db_benchmark.benchmark_tools.generate_workload import LogicalOperator
+from cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOperator
+from cross_db_benchmark.benchmark_tools.trino.utils import plan_statistics
 
 # Trino特有の正規表現パターン
 trino_timing_regex = re.compile(r'Queued: ([\d.]+)(?:us|μs), Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)(ms|s|m|us|μs)?')
@@ -30,6 +30,24 @@ class TrinoPlanParser(AbstractPlanParser):
     
     def __init__(self):
         super().__init__(database_type="trino")
+    
+    def parse_raw_plan(self, plan_text, analyze=True, parse=True, **kwargs):
+        """
+        Parse raw Trino EXPLAIN ANALYZE text output.
+        
+        This is the unified interface implementation for Trino.
+        Wraps parse_trino_raw_plan_v2 to provide the standard interface.
+        
+        Args:
+            plan_text: Raw Trino EXPLAIN ANALYZE output as string
+            analyze: Whether to extract execution statistics (default: True)
+            parse: Whether to parse the plan structure (default: True)
+            **kwargs: Additional Trino-specific parameters
+        
+        Returns:
+            tuple: (root_operator, execution_time, planning_time)
+        """
+        return parse_trino_raw_plan_v2(plan_text, analyze=analyze, parse=parse)
     
     def parse_plans(self, run_stats, min_runtime=100, max_runtime=30000, parse_baseline=False, cap_queries=None,
                    parse_join_conds=False, include_zero_card=False, explain_only=False, **kwargs):
@@ -77,8 +95,8 @@ class TrinoPlanParser(AbstractPlanParser):
                 
                 plan_text = '\n'.join(plan_lines)
                 
-                # プランを解析
-                root_operator, execution_time, planning_time = parse_trino_raw_plan_v2(
+                # 統一インターフェースを使用
+                root_operator, execution_time, planning_time = self.parse_raw_plan(
                     plan_text, analyze=True, parse=True
                 )
                 
@@ -146,7 +164,7 @@ class TrinoPlanParser(AbstractPlanParser):
     def parse_single_plan(self, plan_text, analyze=True, parse=True, **kwargs):
         """単一のTrinoプランを解析"""
         try:
-            root_operator, execution_time, planning_time = parse_trino_raw_plan_v2(
+            root_operator, execution_time, planning_time = self.parse_raw_plan(
                 plan_text, analyze=analyze, parse=parse
             )
             return root_operator

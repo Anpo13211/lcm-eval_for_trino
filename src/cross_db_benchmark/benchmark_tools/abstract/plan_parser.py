@@ -109,6 +109,41 @@ class AbstractPlanParser(ABC):
         """
         pass
     
+    @abstractmethod
+    def parse_raw_plan(
+        self,
+        plan_text: Union[str, List[str]],
+        analyze: bool = True,
+        parse: bool = True,
+        **kwargs
+    ) -> tuple[Optional[Any], float, float]:
+        """
+        Parse raw EXPLAIN ANALYZE text output from the database.
+        
+        This is the unified interface for parsing raw plan text across all databases.
+        Both PostgreSQL and Trino implement this method to parse their respective
+        EXPLAIN ANALYZE output formats.
+        
+        Args:
+            plan_text: Raw plan text from EXPLAIN ANALYZE
+                      Can be a string (Trino) or list of strings (PostgreSQL)
+            analyze: Whether to extract execution statistics (default: True)
+            parse: Whether to parse the plan structure (default: True)
+            **kwargs: Additional database-specific parameters
+        
+        Returns:
+            tuple: (root_operator, execution_time, planning_time) where:
+                - root_operator: AbstractPlanOperator tree root (None if parse=False)
+                - execution_time: Execution time in milliseconds
+                - planning_time: Planning time in milliseconds
+        
+        Example:
+            >>> parser = TrinoPlanParser()
+            >>> root, exec_time, plan_time = parser.parse_raw_plan(plan_text)
+            >>> print(f"Execution: {exec_time}ms, Planning: {plan_time}ms")
+        """
+        pass
+    
     def get_statistics(self, parsed_plans: List[Any]) -> Dict[str, Any]:
         """
         Calculate statistics from parsed plans.
@@ -300,6 +335,84 @@ class AbstractPlanParser(ABC):
                     print(f"  {op_name:30s}: {count:4d} ({percentage:5.1f}%)")
         
         print(f"{'='*60}\n")
+    
+    def parse_explain_analyze_file(
+        self,
+        file_path: str,
+        min_runtime: float = 100,
+        max_runtime: float = 30000,
+        **kwargs
+    ) -> tuple[List[Any], List[float]]:
+        """
+        Parse EXPLAIN ANALYZE results from a text file.
+        
+        This method reads a text file containing multiple EXPLAIN ANALYZE outputs
+        (separated by statement markers like "-- stmt N") and parses each one.
+        
+        Args:
+            file_path: Path to the text file containing EXPLAIN ANALYZE results
+            min_runtime: Minimum runtime threshold in milliseconds (default: 100)
+            max_runtime: Maximum runtime threshold in milliseconds (default: 30000)
+            **kwargs: Additional parameters to pass to parse_raw_plan
+        
+        Returns:
+            tuple: (parsed_plans, runtimes) where:
+                - parsed_plans: List of parsed AbstractPlanOperator instances
+                - runtimes: List of execution times in milliseconds
+        
+        Example:
+            >>> parser = TrinoPlanParser()
+            >>> plans, times = parser.parse_explain_analyze_file("results.txt")
+            >>> print(f"Parsed {len(plans)} plans")
+        """
+        import re
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Split by statement markers (e.g., "-- stmt 1", "-- complex_workload_200k_s1 stmt 1")
+        stmt_pattern = re.compile(r'^--.*stmt\s+\d+', re.MULTILINE)
+        parts = stmt_pattern.split(content)
+        
+        parsed_plans = []
+        runtimes = []
+        
+        for i, part in enumerate(parts):
+            if not part.strip():
+                continue
+            
+            # Remove surrounding quotes if present
+            plan_text = part.strip()
+            if plan_text.startswith('"') and plan_text.endswith('"'):
+                plan_text = plan_text[1:-1]
+            
+            if not plan_text:
+                continue
+            
+            try:
+                root_operator, execution_time, planning_time = self.parse_raw_plan(
+                    plan_text,
+                    analyze=True,
+                    parse=True,
+                    **kwargs
+                )
+                
+                if root_operator is None:
+                    continue
+                
+                # Filter by runtime
+                if execution_time < min_runtime or execution_time > max_runtime:
+                    continue
+                
+                root_operator.plan_runtime = execution_time
+                parsed_plans.append(root_operator)
+                runtimes.append(execution_time)
+                
+            except Exception as e:
+                print(f"Warning: Failed to parse statement {i}: {e}")
+                continue
+        
+        return parsed_plans, runtimes
     
     def __repr__(self) -> str:
         """String representation of the parser"""

@@ -25,36 +25,104 @@ def read_workload_runs(workload_run_paths: List[Path],
     database_statistics = dict()
 
     for path_index, path in enumerate(workload_run_paths):
-        try:
-            run = load_json(path)
-        except JSONDecodeError:
-            raise ValueError(f"Error reading {path}")
-        database_statistics[path_index] = run.database_stats
-        if hasattr(run, 'run_kwargs'):
-         database_statistics[path_index].run_kwars = run.run_kwargs
-
-        limit_per_ds = None
-        if limit_queries is not None:
-            if path_index >= len(workload_run_paths) - limit_queries_affected_wl:
-                limit_per_ds = limit_queries // limit_queries_affected_wl
-                print(f"Capping workload {path} after {limit_per_ds} queries")
-
-        if execution_mode == ExecutionMode.RAW_OUTPUT:
-            for p_id, plan in enumerate(run.parsed_plans):
-                plan.database_id = path_index
-                plans.append(plan)
-                if limit_per_ds is not None and p_id > limit_per_ds:
-                    print("Stopping now")
-                    break
+        # Check if file is .txt (raw EXPLAIN ANALYZE results)
+        if str(path).endswith('.txt'):
+            print(f"Loading raw EXPLAIN ANALYZE text file: {path}")
+            try:
+                plans_from_txt, database_stats = read_explain_analyze_txt(
+                    path, 
+                    path_index,
+                    limit_per_ds=limit_queries // limit_queries_affected_wl if limit_queries else None
+                )
+                plans.extend(plans_from_txt)
+                database_statistics[path_index] = database_stats
+            except Exception as e:
+                raise ValueError(f"Error reading text file {path}: {e}")
         else:
-            for plan in run.query_list:
-                if plan.analyze_plans:
-                    analyze_plans = plan.analyze_plans
-                    # assert len(analyze_plans) == 1, "Multiple plans found"
-                    plans.append(analyze_plans[0])
+            # Original JSON loading logic
+            try:
+                run = load_json(path)
+            except JSONDecodeError:
+                raise ValueError(f"Error reading {path}")
+            database_statistics[path_index] = run.database_stats
+            if hasattr(run, 'run_kwargs'):
+             database_statistics[path_index].run_kwars = run.run_kwargs
+
+            limit_per_ds = None
+            if limit_queries is not None:
+                if path_index >= len(workload_run_paths) - limit_queries_affected_wl:
+                    limit_per_ds = limit_queries // limit_queries_affected_wl
+                    print(f"Capping workload {path} after {limit_per_ds} queries")
+
+            if execution_mode == ExecutionMode.RAW_OUTPUT:
+                for p_id, plan in enumerate(run.parsed_plans):
+                    plan.database_id = path_index
+                    plans.append(plan)
+                    if limit_per_ds is not None and p_id > limit_per_ds:
+                        print("Stopping now")
+                        break
+            else:
+                for plan in run.query_list:
+                    if plan.analyze_plans:
+                        analyze_plans = plan.analyze_plans
+                        # assert len(analyze_plans) == 1, "Multiple plans found"
+                        plans.append(analyze_plans[0])
 
     #print(f"No of Plans: {len(plans)} for {workload_run_paths}")
     return plans, database_statistics
+
+
+def read_explain_analyze_txt(
+    txt_path: Path,
+    path_index: int,
+    limit_per_ds: Optional[int] = None
+) -> tuple:
+    """
+    Read raw EXPLAIN ANALYZE results from .txt file
+    
+    Args:
+        txt_path: Path to the .txt file
+        path_index: Index for database_id assignment
+        limit_per_ds: Maximum number of queries to load (None for no limit)
+    
+    Returns:
+        tuple: (plans, database_stats)
+    """
+    from cross_db_benchmark.benchmark_tools.trino.parse_plan import TrinoPlanParser
+    from types import SimpleNamespace
+    
+    # Determine database type from path
+    # For now, we assume Trino. This can be extended to detect PostgreSQL etc.
+    parser = TrinoPlanParser()
+    
+    # Parse the text file
+    parsed_plans, runtimes = parser.parse_explain_analyze_file(
+        str(txt_path),
+        min_runtime=0,  # Accept all runtimes during loading
+        max_runtime=float('inf')
+    )
+    
+    # Apply limit if specified
+    if limit_per_ds is not None:
+        parsed_plans = parsed_plans[:limit_per_ds]
+        runtimes = runtimes[:limit_per_ds]
+        print(f"Limited to {limit_per_ds} queries")
+    
+    # Set database_id for each plan
+    for plan in parsed_plans:
+        plan.database_id = path_index
+    
+    # Create dummy database statistics
+    # In the future, this should be loaded from a companion stats file
+    database_stats = SimpleNamespace(
+        table_stats=[],
+        column_stats=[],
+        database_type='trino'
+    )
+    
+    print(f"Loaded {len(parsed_plans)} plans from {txt_path}")
+    
+    return parsed_plans, database_stats
 
 
 def _inv_log1p(x):
