@@ -2,10 +2,16 @@ import collections
 import re
 
 import numpy as np
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    # tqdmが利用できない場合は通常のrangeを使用
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
 
+from cross_db_benchmark.benchmark_tools.abstract.plan_parser import AbstractPlanParser
 from cross_db_benchmark.benchmark_tools.generate_workload import LogicalOperator
-from cross_db_benchmark.benchmark_tools.postgres.plan_operator import PlanOperator
+from cross_db_benchmark.benchmark_tools.postgres.plan_operator import PostgresPlanOperator
 from cross_db_benchmark.benchmark_tools.postgres.utils import plan_statistics
 
 planning_time_regex = re.compile('planning time: (?P<planning_time>\d+.\d+) ms')
@@ -16,7 +22,7 @@ join_columns_regex = re.compile('\w+\.\w+ ?= ?\w+\.\w+')
 
 def create_node(lines_plan_operator, operators_current_level):
     if len(lines_plan_operator) > 0:
-        last_operator = PlanOperator(lines_plan_operator)
+        last_operator = PostgresPlanOperator(lines_plan_operator)
         operators_current_level.append(last_operator)
         lines_plan_operator = []
     return lines_plan_operator
@@ -102,6 +108,31 @@ def parse_raw_plan(analyze_plan_tuples: list, analyze: bool = True, parse: bool 
         root_operator = parse_recursively(None, plan_steps, 0, 0)
 
     return root_operator, ex_time, planning_time
+
+
+class PostgresPlanParser(AbstractPlanParser):
+    """PostgreSQL-specific plan parser implementation"""
+    
+    def __init__(self):
+        super().__init__(database_type="postgres")
+    
+    def parse_raw_plan(self, plan_text, analyze=True, parse=True, **kwargs):
+        """Parse raw PostgreSQL EXPLAIN ANALYZE text output"""
+        # Use existing parse_raw_plan function
+        # Note: This expects a list of tuples, so we need to adapt
+        if isinstance(plan_text, str):
+            plan_text = [(plan_text, 0, 0)]  # (plan, planning_time, execution_time)
+        return parse_raw_plan(plan_text, analyze=analyze, parse=parse)
+    
+    def parse_plans(self, run_stats, **kwargs):
+        """Parse multiple plans"""
+        # Use existing parse_plans function
+        return parse_plans(run_stats, **kwargs)
+    
+    def parse_single_plan(self, plan_text, **kwargs):
+        """Parse a single plan"""
+        # Use parse_raw_plan for single plan
+        return self.parse_raw_plan(plan_text, **kwargs)
 
 
 def parse_plans(run_stats, min_runtime=100, max_runtime=30000, parse_baseline=False, cap_queries=None,
@@ -335,6 +366,10 @@ def normalize_join_condition(p_join_str):
     join_conds = sorted(join_conds)
     join_conds = ' AND '.join(join_conds)
     return join_conds
+
+
+# Backward compatibility aliases
+PlanOperator = PostgresPlanOperator
 
 
 def normalize_single_join_condition(p_join_str):

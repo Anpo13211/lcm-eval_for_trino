@@ -1,6 +1,7 @@
 import math
 import re
 
+from cross_db_benchmark.benchmark_tools.abstract.plan_operator import AbstractPlanOperator
 from cross_db_benchmark.benchmark_tools.generate_workload import Aggregator, ExtendedAggregator, LogicalOperator
 from cross_db_benchmark.benchmark_tools.postgres.parse_filter import parse_filter, PredicateNode
 from cross_db_benchmark.benchmark_tools.postgres.utils import child_prod
@@ -15,16 +16,11 @@ filter_columns_regex = re.compile('([^\(\)\*\+\-\'\= ]+)')
 literal_regex = re.compile('(\'[^\']+\'::[^\'\)]+)')
 
 
-class PlanOperator(dict):
+class PostgresPlanOperator(AbstractPlanOperator):
+    """PostgreSQL-specific plan operator implementation"""
 
     def __init__(self, plain_content, children=None, plan_parameters=None, plan_runtime=0):
-        super().__init__()
-        self.__dict__ = self
-        self.plain_content = plain_content
-
-        self.plan_parameters = plan_parameters if plan_parameters is not None else dict()
-        self.children = list(children) if children is not None else []
-        self.plan_runtime = plan_runtime
+        super().__init__(plain_content, children, plan_parameters, plan_runtime)
 
     def parse_lines(self, alias_dict=None, parse_baseline=False, parse_join_conds=False):
         op_line = self.plain_content[0]
@@ -315,3 +311,7 @@ class PlanOperator(dict):
     def __str__(self):
         rec_str = self.recursive_str(0)
         return '\n'.join(rec_str)
+
+
+# Backward compatibility alias
+PlanOperator = PostgresPlanOperator
