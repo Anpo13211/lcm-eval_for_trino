@@ -1,4 +1,5 @@
 import functools
+import json
 from json import JSONDecodeError
 from pathlib import Path
 from typing import List, Optional
@@ -112,11 +113,60 @@ def read_explain_analyze_txt(
     for plan in parsed_plans:
         plan.database_id = path_index
     
-    # Create dummy database statistics
-    # In the future, this should be loaded from a companion stats file
+    # Load database statistics from datasets_statistics directory
+    # Try to infer schema name from path
+    schema_name = None
+    if 'accidents' in str(txt_path).lower():
+        schema_name = 'accidents'
+    elif 'imdb' in str(txt_path).lower():
+        schema_name = 'imdb'
+    # Add more dataset name detection as needed
+    
+    table_stats_list = []
+    column_stats_list = []
+    
+    if schema_name:
+        # Try to load from datasets_statistics directory
+        stats_dir = Path('datasets_statistics') / f"iceberg_{schema_name}"
+        if stats_dir.exists():
+            table_stats_file = stats_dir / 'table_stats.json'
+            column_stats_file = stats_dir / 'column_stats.json'
+            
+            if table_stats_file.exists() and column_stats_file.exists():
+                print(f"Loading statistics from {stats_dir}")
+                try:
+                    with open(table_stats_file, 'r') as f:
+                        table_stats_dict = json.load(f)
+                    with open(column_stats_file, 'r') as f:
+                        column_stats_dict = json.load(f)
+                    
+                    # Convert to list format (PostgreSQL compatible)
+                    for table_name, stats in table_stats_dict.items():
+                        table_stats_list.append(SimpleNamespace(
+                            relname=table_name,
+                            reltuples=stats.get('reltuples', stats.get('row_count', 0)),
+                            relpages=stats.get('relpages', 0)
+                        ))
+                    
+                    # Convert column stats to list format
+                    for col_key, stats in column_stats_dict.items():
+                        column_stats_list.append(SimpleNamespace(
+                            tablename=stats.get('table'),
+                            attname=stats.get('column'),
+                            attnum=len(column_stats_list),
+                            null_frac=stats.get('null_frac', 0),
+                            avg_width=stats.get('avg_width', 0),
+                            n_distinct=stats.get('n_distinct', -1),
+                            correlation=stats.get('correlation', 0)
+                        ))
+                    
+                    print(f"Loaded {len(table_stats_list)} table stats and {len(column_stats_list)} column stats")
+                except Exception as e:
+                    print(f"Warning: Failed to load statistics: {e}")
+    
     database_stats = SimpleNamespace(
-        table_stats=[],
-        column_stats=[],
+        table_stats=table_stats_list,
+        column_stats=column_stats_list,
         database_type='trino'
     )
     

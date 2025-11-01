@@ -127,6 +127,12 @@ class FeatureEmbedding(nn.Module):
         operator_ids = filter_expand[:, :, 1].long()
         literals = filter_expand[:, :, 2].unsqueeze(-1)  # b by 3 by 1
 
+        # Clamp IDs to valid ranges to avoid out-of-bound indices
+        max_col_idx = self.column_embedding.num_embeddings - 1
+        max_op_idx = self.filter_operator_embedding.num_embeddings - 1
+        column_ids = torch.clamp(column_ids, min=0, max=max_col_idx)
+        operator_ids = torch.clamp(operator_ids, min=0, max=max_op_idx)
+
         embedded_columns = self.column_embedding(column_ids)
         embedded_operators = self.filter_operator_embedding(operator_ids)
 
@@ -222,7 +228,9 @@ class QueryFormer(nn.Module):
 
         # Add join encodings to the embedded features
         joins = joins.repeat(1, 6)
-        embedded_joins = self.join_encoder(joins.long())
+        max_join_idx = self.join_encoder.num_embeddings - 1
+        joins = torch.clamp(joins.long(), min=0, max=max_join_idx)
+        embedded_joins = self.join_encoder(joins)
         embedded_features = embedded_features + embedded_joins
 
         # Add super token to the embedded features

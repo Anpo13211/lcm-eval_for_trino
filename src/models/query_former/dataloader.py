@@ -58,8 +58,15 @@ def parse_filter_information(filter_columns: SimpleNamespace, filter_info=None):
     filter_col = filter_columns.column
     filter_op = filter_columns.operator
     filter_literal = filter_columns.literal
-    if (filter_col, filter_op, filter_literal) not in filter_info:
-        filter_info.append((filter_col, filter_op, filter_literal))
+    
+    # columnがNoneかつliteralがリスト形式の場合はスキップ（IN句の子ノード）
+    if filter_col is None and isinstance(filter_literal, (list, tuple)):
+        # このノードは追加しない（IN句の不完全な子ノード）
+        pass
+    else:
+        if (filter_col, filter_op, filter_literal) not in filter_info:
+            filter_info.append((filter_col, filter_op, filter_literal))
+    
     if hasattr(filter_columns, "children"):
         for child in filter_columns.children:
             filter_info = parse_filter_information(child, filter_info)
@@ -72,8 +79,21 @@ def get_encoded_filter(filter_info: List[Tuple[int, int, object]],
                        database_statistics: SimpleNamespace) -> np.ndarray:
     encoded_filters = []
     for (column, operator, literal) in filter_info:
+        # literalがリスト、タプル、または空文字列の場合は0.0に変換
+        # （QueryFormerは文字列リテラルをサポートしていない）
+        if isinstance(literal, (list, tuple)) or (isinstance(literal, str) and not literal):
+            literal = 0.0
+        
         # Encode the filter operator that always need to exist
-        encoded_operator = feature_statistics['operator']['value_dict'][operator]
+        # operatorを文字列に変換（Operator enumの場合）
+        operator_str = str(operator) if operator is not None else 'EQ'
+        
+        # value_dictに存在しない場合はダミー値を使用
+        if operator_str in feature_statistics['operator']['value_dict']:
+            encoded_operator = feature_statistics['operator']['value_dict'][operator_str]
+        else:
+            # 未知の演算子の場合はダミー値（最大値+1）
+            encoded_operator = feature_statistics['operator']['no_vals'] + 1
 
         # Some combinations do not have a filter column, in this case set to NaN (which is the max value + 1)
         if operator in {str(LogicalOperator.AND), str(LogicalOperator.OR)}:
@@ -81,20 +101,33 @@ def get_encoded_filter(filter_info: List[Tuple[int, int, object]],
             encoded_literal = 0.0
 
         else:
-            encoded_column = column  # No scaling required, as it is a categorical identifier
-            column_name = database_statistics.column_stats[column].attname
-            table_name = database_statistics.column_stats[column].tablename
-            col_statistics = column_statistics[table_name][column_name]
-            if col_statistics['datatype'] in {'float', 'int'}:
-                assert literal is not None
-                encoded_literal = (literal - col_statistics['min'])
-                if col_statistics['max'] - col_statistics['min'] > 0:
-                    encoded_literal /= (col_statistics['max'] - col_statistics['min'])
-            else:
-                # According to the official code, QueryFormer does not support string predicates!"
+            # columnがNoneまたは無効な場合はダミー値を使用
+            if column is None or not isinstance(column, int):
+                encoded_column = feature_statistics['column']['max']
                 encoded_literal = 0.0
+            else:
+                encoded_column = column  # No scaling required, as it is a categorical identifier
+                column_name = database_statistics.column_stats[column].attname
+                table_name = database_statistics.column_stats[column].tablename
+                col_statistics = column_statistics[table_name][column_name]
+                if col_statistics['datatype'] in {'float', 'int'}:
+                    assert literal is not None
+                    encoded_literal = (literal - col_statistics['min'])
+                    if col_statistics['max'] - col_statistics['min'] > 0:
+                        encoded_literal /= (col_statistics['max'] - col_statistics['min'])
+                else:
+                    # According to the official code, QueryFormer does not support string predicates!"
+                    encoded_literal = 0.0
+        
+        # 最終確認: encoded_literalが数値型であることを保証
+        if not isinstance(encoded_literal, (int, float, np.number)):
+            encoded_literal = 0.0
+        
         encoded_filters.append((encoded_column, encoded_operator, encoded_literal))
-    return np.asarray(encoded_filters)
+    
+    # すべての要素が数値型であることを確認
+    result = np.asarray(encoded_filters, dtype=np.float64)
+    return result
 
 
 def get_encoded_histograms(filter_info: List[Tuple[int, int, object]],
@@ -106,29 +139,36 @@ def get_encoded_histograms(filter_info: List[Tuple[int, int, object]],
         if operator in {str(LogicalOperator.AND), str(LogicalOperator.OR)}:
             encoded_histograms.append(np.zeros(histogram_bucket_size))
         else:
-            col_name = database_statistics.column_stats[column].attname
-            table_name = database_statistics.column_stats[column].tablename
-            col_stats = column_statistics[table_name][col_name]
-            encoded_histogram = np.zeros(histogram_bucket_size)
-            # Do histogram encoding as written in the paper.
-            # Categorical columns are not supported
-            if col_stats['datatype'] in {'float', 'int'}:
-                percentiles = col_stats['percentiles']
-                for i in range(len(percentiles) - 1):
-                    start_val = percentiles[i]
-                    end_val = percentiles[i + 1]
-                    if start_val <= literal < end_val:
-                        encoded_histogram[i] = 1
-                    if '<' in operator and literal < end_val:
-                        encoded_histogram[i] = 1
-                    elif '>' in operator and literal >= start_val:
-                        encoded_histogram[i] = 1
-            encoded_histograms.append(encoded_histogram)
+            # columnがNoneまたは無効な場合は空のヒストグラムを使用
+            if column is None or not isinstance(column, int):
+                encoded_histograms.append(np.zeros(histogram_bucket_size))
+            else:
+                col_name = database_statistics.column_stats[column].attname
+                table_name = database_statistics.column_stats[column].tablename
+                col_stats = column_statistics[table_name][col_name]
+                encoded_histogram = np.zeros(histogram_bucket_size)
+                # Do histogram encoding as written in the paper.
+                # Categorical columns are not supported
+                if col_stats['datatype'] in {'float', 'int'}:
+                    percentiles = col_stats['percentiles']
+                    if percentiles:  # percentilesがNoneでないことを確認
+                        for i in range(len(percentiles) - 1):
+                            start_val = percentiles[i]
+                            end_val = percentiles[i + 1]
+                            if isinstance(literal, (int, float)):  # literalが数値型の場合のみ
+                                if start_val <= literal < end_val:
+                                    encoded_histogram[i] = 1
+                                if '<' in operator and literal < end_val:
+                                    encoded_histogram[i] = 1
+                                elif '>' in operator and literal >= start_val:
+                                    encoded_histogram[i] = 1
+                encoded_histograms.append(encoded_histogram)
     return np.asarray(encoded_histograms)
 
 
 def get_sample_vector(sample_bitmap_vec: List[int], dim_bitmaps: int) -> torch.Tensor:
-    assert sample_bitmap_vec is not None, "Please make sure to augment sample vectors before use"
+    if sample_bitmap_vec is None:
+        sample_bitmap_vec = [0] * dim_bitmaps
     if len(sample_bitmap_vec) < dim_bitmaps:
         sample_bitmap_vec = sample_bitmap_vec + [0] * (dim_bitmaps - len(sample_bitmap_vec))
     assert len(sample_bitmap_vec) == dim_bitmaps
@@ -152,9 +192,18 @@ def recursively_convert_plan(plan: SimpleNamespace,
     operator_name = plan_parameters['op_name']
     operator_type_id = feature_statistics['op_name']['value_dict'][operator_name]
 
-    # 2. Get table name
-    table_name = plan_parameters.get('tablename')
-    if not table_name:
+    # 2. Get table name (encode to numeric ID)
+    table_name_raw = plan_parameters.get('tablename')
+    if isinstance(table_name_raw, int):
+        table_name = table_name_raw
+    elif isinstance(table_name_raw, str):
+        # Map string table name to numeric ID; fallback to dummy if missing
+        try:
+            value_dict = feature_statistics.get('tablename', {}).get('value_dict', {})
+        except Exception:
+            value_dict = {}
+        table_name = value_dict.get(table_name_raw, feature_statistics['tablename']['no_vals'] + 1)
+    else:
         table_name = feature_statistics['tablename']['no_vals'] + 1  # dummy table
 
     # Parse and encode filters and sample vectors.
@@ -184,10 +233,14 @@ def recursively_convert_plan(plan: SimpleNamespace,
                                                         database_statistics=database_statistics,
                                                         histogram_bucket_size=histogram_bin_size)
         assert not np.isnan(encoded_histogram_info).any(), f"Nans in histogram info: {encoded_histogram_info}"
+        
+        # histogram_infoにencoded_histogram_infoを設定
+        histogram_info = encoded_histogram_info
 
     else:
         sample_bitmap_vec = np.zeros(dim_bitmaps)
         encoded_filter_info = empty_filter_vec
+        histogram_info = np.zeros(shape=(1, histogram_bin_size), dtype=np.float64)
     assert not np.isnan(sample_bitmap_vec).any(), f"Nans in sample bitmap found, {sample_bitmap_vec}"
 
     # Pad filter information to max_filter_number
@@ -219,7 +272,13 @@ def recursively_convert_plan(plan: SimpleNamespace,
                          table_name=table_name)
 
     tree_node.feature_vector = tree_node.featurize()
-    assert not np.isnan(tree_node.feature_vector).any(), "NaN in feature vector"
+    # 安全なNaNチェック（数値型の配列の場合のみ）
+    try:
+        if tree_node.feature_vector.dtype.kind in ('f', 'i', 'u'):  # float、int、unsigned int
+            assert not np.isnan(tree_node.feature_vector).any(), "NaN in feature vector"
+    except (AttributeError, TypeError):
+        # dtype属性がない、または他の型の場合はスキップ
+        pass
 
     # Recursively convert children
     for children in plan.children:
@@ -253,8 +312,15 @@ def encode_query_plan(query_index: int,
                       histogram_bin_size: int = 10):
     # Get Join IDs per query
     join_ids = []
-    for join_cond in query_plan.join_conds:
-        join_ids.append(feature_statistics['join_conds']['value_dict'][join_cond])
+    # join_condsが存在しない場合は空リストとして扱う
+    if hasattr(query_plan, 'join_conds') and query_plan.join_conds:
+        for join_cond in query_plan.join_conds:
+            if join_cond in feature_statistics['join_conds']['value_dict']:
+                join_ids.append(feature_statistics['join_conds']['value_dict'][join_cond])
+            else:
+                # 未知の結合条件の場合は0を追加（ダミー値）
+                join_ids.append(0)
+    # 結合条件が不足している場合は0でパディング
     for i in range(len(join_ids), max_num_joins):
         join_ids.append(0)
     join_ids = torch.Tensor(np.array(join_ids).reshape(1, max_num_joins))

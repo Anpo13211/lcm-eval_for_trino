@@ -14,6 +14,7 @@ def floyd_warshall_transform(adjacency_matrix: np.ndarray) -> np.ndarray:
             if i == j:
                 transformed_matrix[i][j] = 0
             elif transformed_matrix[i][j] == 0:
+                # 到達不能的距離
                 transformed_matrix[i][j] = 60
 
     for k in range(num_rows):

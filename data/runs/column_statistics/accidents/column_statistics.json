@@ -1,0 +1,520 @@
+{
+  "nesreca": {
+    "klas_nesreca": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "upravna_enota": {
+      "datatype": "int",
+      "min": 5501.0,
+      "max": 5599.0,
+      "percentiles": [
+        5501.0,
+        5507.0,
+        5517.0,
+        5523.0,
+        5524.0,
+        5530.0,
+        5540.0,
+        5547.0,
+        5556.0,
+        5564.0,
+        5599.0
+      ],
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "cas_nesreca": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "naselje_ali_izven": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "kategorija_cesta": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 4.715192546852314e-05
+    },
+    "oznaka_cesta_ali_naselje": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 4.715192546852314e-05
+    },
+    "tekst_cesta_ali_naselje": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 5.1081252590900074e-05
+    },
+    "oznaka_odsek_ali_ulica": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 4.715192546852314e-05
+    },
+    "tekst_odsek_ali_ulica": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 4.715192546852314e-05
+    },
+    "stacionazna_ali_hisna_st": {
+      "datatype": "float",
+      "min": 0.0,
+      "max": 100000.0,
+      "percentiles": [
+        0.0,
+        1.4827608925838693,
+        6.0021920707497936,
+        13.223692082280184,
+        24.675544687969932,
+        47.54317406139744,
+        116.81495689733556,
+        489.93951168675795,
+        2160.814316251386,
+        5725.53144926091,
+        100000.0
+      ],
+      "num_unique": null,
+      "null_frac": 0.3976616574294735
+    },
+    "opis_prizorisce": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "vzrok_nesreca": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "tip_nesreca": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "vreme_nesreca": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "stanje_promet": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "stanje_vozisce": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "stanje_povrsina_vozisce": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "x": {
+      "datatype": "float",
+      "min": 378087.0,
+      "max": 617552.0,
+      "percentiles": [
+        378087.0,
+        423559.55961989553,
+        453669.0644969592,
+        462304.0220053045,
+        473058.7731977887,
+        493970.52976684686,
+        516302.5789704999,
+        534327.0854623601,
+        549587.7837805096,
+        564846.8755106797,
+        617552.0
+      ],
+      "num_unique": null,
+      "null_frac": 0.18252313882509189
+    },
+    "y": {
+      "datatype": "float",
+      "min": 32190.0,
+      "max": 192709.0,
+      "percentiles": [
+        32190.0,
+        71136.94119949859,
+        92133.90640061075,
+        100986.30060832553,
+        105955.01930095207,
+        116208.16429878559,
+        124612.04645144491,
+        136760.1684163827,
+        149783.0991069086,
+        157553.6952632513,
+        192709.0
+      ],
+      "num_unique": null,
+      "null_frac": 0.18252313882509189
+    },
+    "x_wgs84": {
+      "datatype": "float",
+      "min": 13.4140017836038,
+      "max": 16.5273252071308,
+      "percentiles": [
+        13.4140017836038,
+        14.008513364637416,
+        14.390356387987023,
+        14.505517008902913,
+        14.615537770188457,
+        14.938577301786047,
+        15.197768389100318,
+        15.458995557112985,
+        15.644526838878084,
+        15.845240760360271,
+        16.5273252071308
+      ],
+      "num_unique": null,
+      "null_frac": 0.18252313882509189
+    },
+    "y_wgs84": {
+      "datatype": "float",
+      "min": 45.4299544471246,
+      "max": 46.8713379932956,
+      "percentiles": [
+        45.4299544471246,
+        45.782563317826906,
+        45.971321362974976,
+        46.052048250170174,
+        46.096729498974305,
+        46.18866027115681,
+        46.27060796513317,
+        46.36953440282343,
+        46.49571497590148,
+        46.5599368907566,
+        46.8713379932956
+      ],
+      "num_unique": null,
+      "null_frac": 0.18252313882509189
+    }
+  },
+  "oseba": {
+    "povzrocitelj_ali_udelezenec": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0.004042824379792796
+    },
+    "starost": {
+      "datatype": "float",
+      "min": 0.0,
+      "max": 99.0,
+      "percentiles": [
+        0.0,
+        19.85403341469965,
+        22.739587849554525,
+        25.888668596695148,
+        29.43316720912525,
+        33.53053527479227,
+        38.06053431498916,
+        42.866430611725356,
+        48.484893699196554,
+        56.36302924633216,
+        99.0
+      ],
+      "num_unique": null,
+      "null_frac": 0.001398270086244125
+    },
+    "spol": {
+      "datatype": "int",
+      "min": 0.0,
+      "max": 2.0,
+      "percentiles": [
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "upravna_enota": {
+      "datatype": "int",
+      "min": 5501.0,
+      "max": 5599.0,
+      "percentiles": [
+        5501.0,
+        5514.0,
+        5524.0,
+        5534.0,
+        5546.0,
+        5558.0,
+        5580.0,
+        5598.0,
+        5599.0,
+        5599.0,
+        5599.0
+      ],
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "drzavljanstvo": {
+      "datatype": "int",
+      "min": 0.0,
+      "max": 999.0,
+      "percentiles": [
+        0.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        5.0,
+        999.0
+      ],
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "poskodba": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0.006297456280475789
+    },
+    "vrsta_udelezenca": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0.006297456280475789
+    },
+    "varnostni_pas_ali_celada": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0.006042748910942564
+    },
+    "vozniski_staz_ll": {
+      "datatype": "float",
+      "min": 0.0,
+      "max": 99.0,
+      "percentiles": [
+        0.0,
+        1.0515154886518325,
+        2.9403487986929218,
+        5.036238967938522,
+        7.514624626987923,
+        10.41733850804158,
+        13.789407444602759,
+        18.219567068358625,
+        23.167854123070953,
+        29.359273610150904,
+        99.0
+      ],
+      "num_unique": null,
+      "null_frac": 0.1619519598841134
+    },
+    "vozniski_staz_mm": {
+      "datatype": "float",
+      "min": 0.0,
+      "max": 11.0,
+      "percentiles": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.24988583185397667,
+        1.7834534313885055,
+        3.5826214178437104,
+        5.397250953092011,
+        7.27712248806704,
+        9.372579007774997,
+        11.0
+      ],
+      "num_unique": null,
+      "null_frac": 0.25912020091485016
+    },
+    "alkotest": {
+      "datatype": "float",
+      "min": 0.0,
+      "max": 9.83,
+      "percentiles": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.13269241811446644,
+        9.83
+      ],
+      "num_unique": null,
+      "null_frac": 0.4297322113630932
+    },
+    "strokovni_pregled": {
+      "datatype": "float",
+      "min": 0.0,
+      "max": 9.1,
+      "percentiles": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        9.1
+      ],
+      "num_unique": null,
+      "null_frac": 0.42744298957272053
+    },
+    "starost_d": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "vozniski_staz_d": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "alkotest_d": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "strokovni_pregled_d": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    }
+  },
+  "upravna_enota": {
+    "ime_upravna_enota": {
+      "datatype": "misc",
+      "min": null,
+      "max": null,
+      "percentiles": null,
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "st_prebivalcev": {
+      "datatype": "int",
+      "min": 0.0,
+      "max": 326525.0,
+      "percentiles": [
+        0.0,
+        13392.0,
+        16576.0,
+        17870.0,
+        18910.0,
+        21304.0,
+        25148.0,
+        33971.0,
+        51362.0,
+        78700.0,
+        326525.0
+      ],
+      "num_unique": null,
+      "null_frac": 0
+    },
+    "povrsina": {
+      "datatype": "int",
+      "min": 0.0,
+      "max": 939.0,
+      "percentiles": [
+        0.0,
+        105.0,
+        171.0,
+        221.0,
+        266.0,
+        320.0,
+        360.0,
+        469.0,
+        569.0,
+        760.0,
+        939.0
+      ],
+      "num_unique": null,
+      "null_frac": 0
+    }
+  }
+}

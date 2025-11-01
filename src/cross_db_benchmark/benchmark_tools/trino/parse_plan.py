@@ -1,5 +1,6 @@
 import collections
 import re
+from typing import List, Any
 
 import numpy as np
 try:
@@ -15,7 +16,8 @@ from cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOper
 from cross_db_benchmark.benchmark_tools.trino.utils import plan_statistics
 
 # Trino特有の正規表現パターン
-trino_timing_regex = re.compile(r'Queued: ([\d.]+)(?:us|μs), Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)(ms|s|m|us|μs)?')
+# Queuedの単位はus/μs/msのいずれか、Executionの単位はms/s/m/us/μsのいずれか
+trino_timing_regex = re.compile(r'Queued: ([\d.]+)(?:us|μs|ms)?, Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)(ms|s|m|us|μs)?')
 trino_fragment_regex = re.compile(r'Fragment (\d+) \[(\w+)\]')
 trino_cpu_regex = re.compile(r'CPU: ([\d.]+)ms')
 trino_scheduled_regex = re.compile(r'Scheduled: ([\d.]+)ms')
@@ -171,6 +173,79 @@ class TrinoPlanParser(AbstractPlanParser):
         except Exception as e:
             print(f"Error parsing single plan: {e}")
             return None
+    
+    def parse_explain_analyze_file(
+        self,
+        file_path: str,
+        min_runtime: float = 100,
+        max_runtime: float = 30000,
+        **kwargs
+    ) -> tuple[List[Any], List[float]]:
+        """
+        Parse EXPLAIN ANALYZE results from a text file (Trino-specific implementation).
+        
+        This method overrides the base implementation to ensure join_conds are set.
+        """
+        parsed_plans, runtimes = super().parse_explain_analyze_file(
+            file_path, min_runtime=min_runtime, max_runtime=max_runtime, **kwargs
+        )
+        
+        # 各プランにjoin_condsとplan_runtimeを設定
+        for i, plan in enumerate(parsed_plans):
+            if not hasattr(plan, 'join_conds') or plan.join_conds is None:
+                join_conds = extract_join_conditions_trino(plan)
+                plan.join_conds = join_conds
+            
+            # plan_runtimeを設定（runtimesリストから）
+            if i < len(runtimes):
+                plan.plan_runtime = runtimes[i]
+        
+        # テーブルサンプルとカラム統計が提供されている場合は、sample_vecを生成
+        table_samples = kwargs.get('table_samples')
+        col_stats = kwargs.get('col_stats')
+        
+        # カラムIDマッピングも提供されている場合は、カラムIDに変換
+        column_id_mapping = kwargs.get('column_id_mapping')
+        partial_column_name_mapping = kwargs.get('partial_column_name_mapping')
+        table_id_mapping = kwargs.get('table_id_mapping')
+        
+        if table_samples is not None and col_stats is not None:
+            # augment_sample関数を直接使用してsample_vecを生成
+            from models.workload_driven.preprocessing.sample_vectors_trino import augment_sample
+            
+            for plan in parsed_plans:
+                try:
+                    # プランツリーを再帰的に走査してsample_vecを生成
+                    augment_sample(table_samples, col_stats, plan)
+                except Exception as e:
+                    # エラーが発生しても続行（sample_vecは空のまま）
+                    # デバッグ用: 最初の数回のみエラーを出力
+                    if not hasattr(TrinoPlanParser, '_sample_vec_error_count'):
+                        TrinoPlanParser._sample_vec_error_count = 0
+                    if TrinoPlanParser._sample_vec_error_count < 3:
+                        print(f"Warning: Failed to generate sample_vec in parse_explain_analyze_file: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        TrinoPlanParser._sample_vec_error_count += 1
+        
+        # カラムIDマッピングが提供されている場合は、カラムIDに変換
+        if column_id_mapping is not None and partial_column_name_mapping is not None:
+            for plan in parsed_plans:
+                try:
+                    # parse_columns_bottom_upを呼び出してカラムIDに変換
+                    plan.parse_columns_bottom_up(
+                        column_id_mapping=column_id_mapping,
+                        partial_column_name_mapping=partial_column_name_mapping,
+                        table_id_mapping=table_id_mapping if table_id_mapping else {},
+                        alias_dict={},
+                        table_samples=None,  # sample_vecは既に生成済み
+                        col_stats=None
+                    )
+                except Exception:
+                    # エラーが発生しても続行
+                    pass
+        
+        return parsed_plans, runtimes
 
 
 def parse_trino_plan_simple(plan_text):
@@ -186,7 +261,14 @@ def parse_trino_plan_simple(plan_text):
     for line in lines:
         timing_match = trino_timing_regex.search(line)
         if timing_match:
-            queued_time = float(timing_match.group(1)) / 1000  # us/μs to ms
+            queued_value = float(timing_match.group(1))
+            # Queuedの単位を確認（正規表現ではキャプチャしていないので、msかus/μsかを判定）
+            queued_str = timing_match.group(0)
+            if 'ms' in queued_str:
+                queued_time = queued_value  # ms
+            else:
+                queued_time = queued_value / 1000  # us/μs to ms
+            
             analysis_time = float(timing_match.group(2))
             planning_time = float(timing_match.group(3))
             execution_time = float(timing_match.group(4))
@@ -370,6 +452,44 @@ def create_trino_plan_operator(operator_info):
     return operator
 
 
+def extract_join_conditions_trino(root_operator):
+    """Trinoプランから結合条件を抽出"""
+    join_conds = []
+    
+    def traverse_plan(node):
+        """プランを再帰的に走査して結合条件を収集"""
+        # 現在のノードがJoin演算子かチェック
+        op_name = node.plan_parameters.get('op_name', '').lower()
+        
+        # Join演算子の検出（InnerJoin, LeftJoin, RightJoin, FullJoin, CrossJoinなど）
+        if 'join' in op_name:
+            # criteriaパラメータから結合条件を抽出
+            # InnerJoin[criteria = (id_upravna_enota = upravna_enota_4), ...]のような形式
+            criteria = node.plan_parameters.get('criteria')
+            if criteria:
+                # 括弧を除去して結合条件を正規化
+                join_cond = criteria.strip('()')
+                if join_cond:
+                    join_conds.append(join_cond)
+            else:
+                # filterPredicateから結合条件を推測（結合条件らしいフィルタを探す）
+                filter_condition = node.plan_parameters.get('filter_condition')
+                if filter_condition:
+                    # 等号を含むフィルタを結合条件として扱う
+                    if '=' in filter_condition and '.' in filter_condition:
+                        # テーブル名.カラム名の形式を検出
+                        join_cond = filter_condition.strip('()')
+                        if join_cond:
+                            join_conds.append(join_cond)
+        
+        # 子ノードを再帰的に走査
+        for child in node.children:
+            traverse_plan(child)
+    
+    traverse_plan(root_operator)
+    return join_conds
+
+
 def parse_trino_raw_plan_v2(plan_text, analyze=True, parse=True):
     """Trinoの生プランテキストを解析（改良版）"""
     if not parse:
@@ -404,6 +524,10 @@ def parse_trino_raw_plan_v2(plan_text, analyze=True, parse=True):
     
     # 演算子を階層構造に変換（全Fragmentの演算子を含む）
     root_operator = build_hierarchy(root_operators, all_fragment_operators)
+    
+    # 結合条件を抽出してroot_operatorに設定
+    join_conds = extract_join_conditions_trino(root_operator)
+    root_operator.join_conds = join_conds
     
     return root_operator, execution_time, planning_time
 
@@ -541,7 +665,7 @@ def build_hierarchy(operators, all_fragment_operators=None):
     
     # 子ノードのカーディナリティを計算とoutput_columnsの生成（Trino用に簡略化）
     try:
-        root_operator.parse_columns_bottom_up({}, {}, {}, alias_dict={})
+        root_operator.parse_columns_bottom_up({}, {}, {}, alias_dict={}, table_samples=None, col_stats=None)
     except (KeyError, ValueError) as e:
         # Trinoの複雑なカラム名に対応するため、エラーを無視してoutput_columnsのみ生成
         print(f"⚠️  parse_columns_bottom_upでエラー（無視）: {e}")
@@ -689,13 +813,24 @@ def parse_trino_plans_v2(run_stats, min_runtime=100, max_runtime=30000, parse_ba
         if not analyze_plan:
             continue
         
+        # 結合条件を抽出して設定（まだ設定されていない場合）
+        if not hasattr(analyze_plan, 'join_conds') or analyze_plan.join_conds is None:
+            join_conds = extract_join_conditions_trino(analyze_plan)
+            analyze_plan.join_conds = join_conds
+        
         # プラン統計情報を収集
         tables, filter_columns, operators = plan_statistics(analyze_plan)
         
         # カラム情報を統計情報と照合
         try:
+            # テーブルサンプルとカラム統計を取得（オプショナル）
+            table_samples = getattr(run_stats, 'table_samples', None)
+            col_stats = database_stats.column_stats if hasattr(database_stats, 'column_stats') else None
+            
             analyze_plan.parse_columns_bottom_up(column_id_mapping, partial_column_name_mapping, table_id_mapping,
-                                               alias_dict=alias_dict)
+                                               alias_dict=alias_dict,
+                                               table_samples=table_samples,
+                                               col_stats=col_stats)
         except Exception as e:
             print(f"Warning: Column parsing failed: {e}")
         

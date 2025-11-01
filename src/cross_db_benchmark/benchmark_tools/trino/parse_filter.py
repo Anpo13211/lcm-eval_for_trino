@@ -101,6 +101,38 @@ class TrinoPredicateNode(AbstractPredicateNode):
                     except ValueError:
                         pass
             
+            # 特殊な構文のパース（TrinoのLikePattern、IN句など）
+            if node_op is None:
+                # column, LikePattern 'pattern'のパース（既に$like()が削除されている形式）
+                like_pattern_match = re.search(r'^([^,]+),\s*LikePattern\s*\'([^\']+)\'', self.text)
+                if like_pattern_match:
+                    column = like_pattern_match.group(1).strip()
+                    pattern = like_pattern_match.group(2)
+                    # Trinoのパターンは[]で囲まれていることが多い
+                    if pattern.startswith('[') and pattern.endswith(']'):
+                        pattern = pattern[1:-1]
+                    # %をそのまま使用してSQL LIKE形式に変換
+                    # %P%N% -> %P%N%のようなパターン
+                    if not pattern.startswith('%'):
+                        pattern = f'%{pattern}%'
+                    node_op = Operator.LIKE
+                    literal = pattern
+                    column = (column,)
+                
+                # IN (varchar 'val1', varchar 'val2', ...)のパース
+                elif ' IN ' in self.text or self.text.strip().startswith('varchar '):
+                    # varchar 'val1', varchar 'val2', ... の形式（IN句から抽出された値のリスト）
+                    values = []
+                    for val_match in re.finditer(r"(?:varchar|bigint|integer|double)\s*'([^']*)'", self.text):
+                        values.append(val_match.group(1))
+                    
+                    if values:
+                        # カラム名は前のコンテキストから推測する必要がある
+                        # ただし、単独のリストとして扱う場合は、ノードにカラム情報がない
+                        node_op = Operator.IN
+                        literal = values
+                        column = None  # カラム名は別途設定される必要がある
+            
             if node_op is None:
                 print(f"Warning: Could not parse: '{self.text}'")
                 # Set default operator for unparseable text

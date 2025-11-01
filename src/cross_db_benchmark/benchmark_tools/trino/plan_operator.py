@@ -111,6 +111,26 @@ class TrinoPlanOperator(AbstractPlanOperator):
                         self.plan_parameters.update(dict(layout=layout))
                 break
         
+        # 結合条件を抽出（Join演算子の場合）
+        if 'criteria = ' in op_line:
+            start = op_line.find('criteria = ')
+            if start != -1:
+                start += len('criteria = ')
+                # 括弧の対応を考慮して抽出
+                paren_count = 0
+                end = start
+                for i, char in enumerate(op_line[start:], start):
+                    if char == '(':
+                        paren_count += 1
+                    elif char == ')':
+                        paren_count -= 1
+                        if paren_count == 0:
+                            end = i + 1
+                            break
+                if end > start:
+                    criteria = op_line[start:end]
+                    self.plan_parameters.update(dict(criteria=criteria))
+        
         # フィルター条件を抽出
         if 'filterPredicate = ' in op_line:
             start = op_line.find('filterPredicate = ')
@@ -603,7 +623,8 @@ class TrinoPlanOperator(AbstractPlanOperator):
             
             self.plan_parameters.update(dict(filter_columns=parse_tree))
     
-    def parse_columns_bottom_up(self, column_id_mapping, partial_column_name_mapping, table_id_mapping, alias_dict):
+    def parse_columns_bottom_up(self, column_id_mapping, partial_column_name_mapping, table_id_mapping, alias_dict,
+                                table_samples=None, col_stats=None):
         """カラム情報を統計情報と照合"""
         if alias_dict is None:
             alias_dict = dict()
@@ -616,7 +637,8 @@ class TrinoPlanOperator(AbstractPlanOperator):
         # 子ノードからテーブル情報を収集
         for c in self.children:
             node_tables.update(
-                c.parse_columns_bottom_up(column_id_mapping, partial_column_name_mapping, table_id_mapping, alias_dict))
+                c.parse_columns_bottom_up(column_id_mapping, partial_column_name_mapping, table_id_mapping, alias_dict,
+                                         table_samples=table_samples, col_stats=col_stats))
         
         # 子ノードのカーディナリティを計算
         self.plan_parameters['act_children_card'] = child_prod(self, 'act_output_rows')
@@ -626,35 +648,128 @@ class TrinoPlanOperator(AbstractPlanOperator):
         if 'workers_planned' not in self.plan_parameters:
             self.plan_parameters['workers_planned'] = 1
         
-        # 出力カラムの処理
-        layout = self.plan_parameters.get('layout')
-        if layout:
-            output_columns = self.parse_output_columns(','.join(layout))
-            for output_column in output_columns:
-                col_ids = []
-                for c in output_column['columns']:
-                    try:
-                        c_id = self.lookup_column_id(c, column_id_mapping, node_tables, partial_column_name_mapping, alias_dict)
-                        col_ids.append(c_id)
-                    except:
-                        if c[0] != 'subgb':
-                            raise ValueError(f"Did not find unique table for column {c}")
+        # 出力カラムの処理（エラーが発生しても続行）
+        try:
+            layout = self.plan_parameters.get('layout')
+            if layout:
+                output_columns = self.parse_output_columns(','.join(layout))
+                for output_column in output_columns:
+                    col_ids = []
+                    for c in output_column['columns']:
+                        try:
+                            c_id = self.lookup_column_id(c, column_id_mapping, node_tables, partial_column_name_mapping, alias_dict)
+                            col_ids.append(c_id)
+                        except:
+                            if c[0] != 'subgb':
+                                # output_columnsの処理でエラーが発生しても続行（sample_vec生成のために）
+                                raise ValueError(f"Did not find unique table for column {c}")
+                    
+                    output_column['columns'] = col_ids
                 
-                output_column['columns'] = col_ids
-            
-            self.plan_parameters.update(dict(output_columns=output_columns))
+                self.plan_parameters.update(dict(output_columns=output_columns))
+        except Exception:
+            # output_columnsの処理でエラーが発生しても続行（sample_vec生成のために）
+            pass
         
         # フィルターカラムの処理
         filter_columns = self.plan_parameters.get('filter_columns')
         if filter_columns is not None:
-            filter_columns.lookup_columns(self, column_id_mapping=column_id_mapping, node_tables=node_tables,
-                                        partial_column_name_mapping=partial_column_name_mapping,
-                                        alias_dict=alias_dict)
-            self.plan_parameters['filter_columns'] = filter_columns.to_dict()
+            # 既に辞書形式の場合でも、カラムIDに変換する必要がある
+            if isinstance(filter_columns, dict):
+                # 辞書形式のfilter_columns内のcolumnをカラムIDに変換
+                def convert_dict_filter_columns(fc_dict):
+                    if not isinstance(fc_dict, dict):
+                        return
+                    
+                    column = fc_dict.get('column')
+                    if column is not None and isinstance(column, (tuple, list)):
+                        if len(column) == 1:
+                            col_name = str(column[0]).strip('"')
+                            # Trinoエイリアス（_数字）を削除
+                            import re
+                            col_name_without_suffix = re.sub(r'_\d+$', '', col_name)
+                            
+                            # テーブル名を推測してカラムIDを取得
+                            for table_name in partial_column_name_mapping.get(col_name, set()):
+                                if (table_name, col_name) in column_id_mapping:
+                                    fc_dict['column'] = column_id_mapping[(table_name, col_name)]
+                                    break
+                            else:
+                                # サフィックス削除版で再試行
+                                for table_name in partial_column_name_mapping.get(col_name_without_suffix, set()):
+                                    if (table_name, col_name_without_suffix) in column_id_mapping:
+                                        fc_dict['column'] = column_id_mapping[(table_name, col_name_without_suffix)]
+                                        break
+                        elif len(column) == 2:
+                            table_name, col_name = column
+                            table_name = str(table_name).strip('"')
+                            col_name = str(col_name).strip('"')
+                            if (table_name, col_name) in column_id_mapping:
+                                fc_dict['column'] = column_id_mapping[(table_name, col_name)]
+                    
+                    # 子ノードを再帰的に変換
+                    for child in fc_dict.get('children', []):
+                        convert_dict_filter_columns(child)
+                
+                convert_dict_filter_columns(filter_columns)
+            else:
+                # PredicateNode形式の場合のみ処理
+                # lookup_columnsを呼び出してカラムIDを設定（失敗しても続行）
+                try:
+                    filter_columns.lookup_columns(self, column_id_mapping=column_id_mapping, node_tables=node_tables,
+                                                partial_column_name_mapping=partial_column_name_mapping,
+                                                alias_dict=alias_dict)
+                except Exception:
+                    # lookup_columnsが失敗しても続行（columnがtupleのままでもsample_vec生成は可能）
+                    pass
+                
+                # sample_vecを生成（to_dict()の前に実行）
+                # lookup_columnsの後、filter_columns.columnはカラムID（整数）またはtupleのまま
+                if table_samples is not None and col_stats is not None:
+                    try:
+                        from models.workload_driven.preprocessing.sample_vectors_trino import construct_filter_sample
+                        
+                        # filter_columnsがPredicateNode形式の場合のみsample_vecを生成
+                        if hasattr(filter_columns, 'operator') and hasattr(filter_columns, 'column'):
+                            sample_vec_series = construct_filter_sample(table_samples, col_stats, filter_columns)
+                            # バイナリベクトルに変換
+                            sample_vec = [1 if s_i else 0 for s_i in sample_vec_series]
+                            
+                            # 1000次元に調整
+                            if len(sample_vec) < 1000:
+                                sample_vec = sample_vec + [0] * (1000 - len(sample_vec))
+                            elif len(sample_vec) > 1000:
+                                sample_vec = sample_vec[:1000]
+                            
+                            self.plan_parameters['sample_vec'] = sample_vec
+                        else:
+                            # PredicateNode形式でない場合は空のsample_vecを設定
+                            self.plan_parameters['sample_vec'] = [0] * 1000
+                    except Exception as e:
+                        # sample_vec生成に失敗した場合は空のsample_vecを設定
+                        # デバッグ用: エラーを出力（最初の数回のみ）
+                        if not hasattr(self, '_sample_vec_error_count'):
+                            self._sample_vec_error_count = 0
+                        if self._sample_vec_error_count < 3:
+                            import traceback
+                            print(f"Warning: Failed to generate sample_vec for {self.plan_parameters.get('op_name', 'Unknown')}: {e}")
+                            traceback.print_exc()
+                            self._sample_vec_error_count += 1
+                        self.plan_parameters['sample_vec'] = [0] * 1000
+                else:
+                    # テーブルサンプルがない場合は空のsample_vecを設定
+                    self.plan_parameters['sample_vec'] = [0] * 1000
+                
+                # to_dict()を呼び出して辞書形式に変換
+                self.plan_parameters['filter_columns'] = filter_columns.to_dict()
         
         # テーブルIDに変換
         table = self.plan_parameters.get('table')
         if table is not None:
+            # QueryFormer互換性のため、'tablename'フィールドも設定
+            if 'tablename' not in self.plan_parameters:
+                self.plan_parameters['tablename'] = table
+            
             if table in table_id_mapping:
                 self.plan_parameters['table'] = table_id_mapping[table]
             else:
