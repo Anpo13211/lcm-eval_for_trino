@@ -189,8 +189,15 @@ def construct_filter_sample_from_dict(table_samples: Dict[str, pd.DataFrame],
     if isinstance(column, int):
         if column < len(col_stats):
             col_stat = col_stats[column]
-            col_name = col_stat.attname
-            table_name = col_stat.tablename
+            # col_statが辞書の場合は適切にアクセス
+            if isinstance(col_stat, dict):
+                col_name = col_stat.get('attname')
+                table_name = col_stat.get('tablename')
+            else:
+                col_name = getattr(col_stat, 'attname', None)
+                table_name = getattr(col_stat, 'tablename', None)
+            if col_name is None or table_name is None:
+                return pd.Series([False] * 1000)
         else:
             return pd.Series([False] * 1000)
     # columnがtupleの場合
@@ -205,8 +212,16 @@ def construct_filter_sample_from_dict(table_samples: Dict[str, pd.DataFrame],
             # テーブル名はcol_statsから推測する必要がある
             table_name = None
             for col_stat in col_stats:
-                if col_stat.attname == col_name:
-                    table_name = col_stat.tablename
+                # col_statが辞書の場合は適切にアクセス
+                if isinstance(col_stat, dict):
+                    attname = col_stat.get('attname')
+                    tablename = col_stat.get('tablename')
+                else:
+                    attname = getattr(col_stat, 'attname', None)
+                    tablename = getattr(col_stat, 'tablename', None)
+                
+                if attname == col_name:
+                    table_name = tablename
                     break
             
             # カラム名が見つからない場合、Trinoのエイリアス（_数字のサフィックス）を削除して再試行
@@ -215,8 +230,16 @@ def construct_filter_sample_from_dict(table_samples: Dict[str, pd.DataFrame],
                 import re
                 col_name_without_suffix = re.sub(r'_\d+$', '', col_name)
                 for col_stat in col_stats:
-                    if col_stat.attname == col_name_without_suffix:
-                        table_name = col_stat.tablename
+                    # col_statが辞書の場合は適切にアクセス
+                    if isinstance(col_stat, dict):
+                        attname = col_stat.get('attname')
+                        tablename = col_stat.get('tablename')
+                    else:
+                        attname = getattr(col_stat, 'attname', None)
+                        tablename = getattr(col_stat, 'tablename', None)
+                    
+                    if attname == col_name_without_suffix:
+                        table_name = tablename
                         col_name = col_name_without_suffix  # カラム名を更新
                         break
             

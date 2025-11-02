@@ -693,6 +693,9 @@ def run(args) -> int:
     # 2. トレーニング/検証セットの分割
     print("📊 ステップ2: トレーニング/検証セットの分割")
     val_size = int(len(train_plans) * args.val_ratio)
+    # 検証セットが空にならないように、少なくとも1個は確保（ただし、train_plansが1個の場合は除く）
+    if val_size == 0 and len(train_plans) > 1:
+        val_size = 1
     train_size = len(train_plans) - val_size
     
     train_plans_split, val_plans_split = random_split(

@@ -79,11 +79,6 @@ def get_encoded_filter(filter_info: List[Tuple[int, int, object]],
                        database_statistics: SimpleNamespace) -> np.ndarray:
     encoded_filters = []
     for (column, operator, literal) in filter_info:
-        # literalがリスト、タプル、または空文字列の場合は0.0に変換
-        # （QueryFormerは文字列リテラルをサポートしていない）
-        if isinstance(literal, (list, tuple)) or (isinstance(literal, str) and not literal):
-            literal = 0.0
-        
         # Encode the filter operator that always need to exist
         # operatorを文字列に変換（Operator enumの場合）
         operator_str = str(operator) if operator is not None else 'EQ'
@@ -110,12 +105,47 @@ def get_encoded_filter(filter_info: List[Tuple[int, int, object]],
                 column_name = database_statistics.column_stats[column].attname
                 table_name = database_statistics.column_stats[column].tablename
                 col_statistics = column_statistics[table_name][column_name]
+                
                 if col_statistics['datatype'] in {'float', 'int'}:
-                    assert literal is not None
-                    encoded_literal = (literal - col_statistics['min'])
-                    if col_statistics['max'] - col_statistics['min'] > 0:
-                        encoded_literal /= (col_statistics['max'] - col_statistics['min'])
+                    # 数値カラムの場合: literalを数値に変換してから処理
+                    numeric_literal = None
+                    
+                    # literalが既に数値型の場合
+                    if isinstance(literal, (int, float, np.number)):
+                        numeric_literal = literal
+                    # literalが文字列の場合、数値への変換を試みる
+                    elif isinstance(literal, str):
+                        try:
+                            # 文字列を数値に変換を試みる（例: "123" -> 123, "123.45" -> 123.45）
+                            numeric_literal = float(literal)
+                        except (ValueError, TypeError):
+                            # 変換に失敗した場合は0.0を使用
+                            # QueryFormerは文字列リテラルをサポートしていないため
+                            numeric_literal = 0.0
+                    # literalがNone、リスト、タプルの場合
+                    elif literal is None or isinstance(literal, (list, tuple)):
+                        numeric_literal = 0.0
+                    else:
+                        numeric_literal = 0.0
+                    
+                    # 数値リテラルでエンコード
+                    if numeric_literal is not None and isinstance(numeric_literal, (int, float, np.number)):
+                        # col_statisticsのmin/maxも数値型であることを確認
+                        col_min = col_statistics.get('min')
+                        col_max = col_statistics.get('max')
+                        
+                        if isinstance(col_min, (int, float, np.number)) and isinstance(col_max, (int, float, np.number)):
+                            encoded_literal = float(numeric_literal - col_min)
+                            col_range = col_max - col_min
+                            if col_range > 0:
+                                encoded_literal /= col_range
+                        else:
+                            # min/maxが数値型でない場合は0.0に設定
+                            encoded_literal = 0.0
+                    else:
+                        encoded_literal = 0.0
                 else:
+                    # 文字列/カテゴリカルカラムの場合: QueryFormerは文字列リテラルをサポートしていない
                     # According to the official code, QueryFormer does not support string predicates!"
                     encoded_literal = 0.0
         
@@ -218,6 +248,22 @@ def recursively_convert_plan(plan: SimpleNamespace,
     histogram_info = np.empty([], dtype=float)
     filter_columns = plan_parameters.get('filter_columns', None)
     if filter_columns is not None:
+        # filter_columnsが辞書の場合はSimpleNamespaceに変換
+        if isinstance(filter_columns, dict):
+            from types import SimpleNamespace
+            def dict_to_namespace(d):
+                if isinstance(d, dict):
+                    ns = SimpleNamespace()
+                    for k, v in d.items():
+                        if isinstance(v, dict):
+                            setattr(ns, k, dict_to_namespace(v))
+                        elif isinstance(v, list):
+                            setattr(ns, k, [dict_to_namespace(item) if isinstance(item, dict) else item for item in v])
+                        else:
+                            setattr(ns, k, v)
+                    return ns
+                return d
+            filter_columns = dict_to_namespace(filter_columns)
         filter_info = parse_filter_information(filter_columns=filter_columns)
         assert len(filter_info) <= max_filter_number, f"Filter number exceeds max filter number, {filter_info}"
         # Get sample vector

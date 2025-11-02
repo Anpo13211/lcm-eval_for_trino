@@ -69,7 +69,18 @@ def encode(column, plan_params, feature_statistics):
     if column == 'act_output_rows' and not hasattr(plan_params, column):
         value = 0
     else:
-        value = getattr(plan_params, column, 0)
+        # 値が存在しない、またはNoneの場合は0を返す（警告を出さない）
+        if hasattr(plan_params, column):
+            value = getattr(plan_params, column)
+            if value is None:
+                # Noneの場合は0を返す（カテゴリカル特徴量の場合は適切に処理される）
+                value = 0
+        elif isinstance(plan_params, dict):
+            value = plan_params.get(column, 0)
+            if value is None:
+                value = 0
+        else:
+            value = 0
     
     if feature_statistics[column].get('type') == str(FeatureType.numeric):
         enc_value = feature_statistics[column]['scaler'].transform(np.array([[value]])).item()
@@ -83,17 +94,23 @@ def encode(column, plan_params, feature_statistics):
         # 未知の値が見つかった場合は安全なデフォルト値を使用
         if str(value) not in value_dict:
             no_vals = feature_statistics[column].get('no_vals', len(value_dict))
+            # 値がNone、空、または0（整数）の場合、警告を出さずにデフォルト値を使用
+            # これらは通常、欠損値やデフォルト値として扱われる
+            should_warn = value is not None and value != 0 and str(value).strip() != '' and str(value) != '0'
+            
             # デフォルト値として0を使用（通常は最も一般的な値）
             if 0 in value_dict.values():
                 # 値が0のキーを探す
                 default_key = [k for k, v in value_dict.items() if v == 0][0]
                 enc_value = 0
-                print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using default index 0 (mapped from '{default_key}')")
+                if should_warn:
+                    print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using default index 0 (mapped from '{default_key}')")
             else:
                 # 0が存在しない場合は、最小インデックスを使用
                 min_index = min(value_dict.values()) if value_dict else 0
                 enc_value = min_index
-                print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using minimum index {min_index} (no_vals={no_vals})")
+                if should_warn:
+                    print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using minimum index {min_index} (no_vals={no_vals})")
         else:
             enc_value = value_dict[str(value)]
     else:
@@ -329,13 +346,17 @@ def encode_or_zero(feature_name, params, feature_statistics):
     elif not isinstance(params, dict):
         params = vars(params)
 
+    # 特徴量が存在しない、または値がNoneの場合は0を返す（encodeを呼ばない）
     if feature_name not in params:
+        return 0.0
+    
+    value = params[feature_name]
+    if value is None:
         return 0.0
 
     # aggregation特徴量の特別処理
     if feature_name == 'aggregation':
-        agg_value = params[feature_name]
-        if agg_value:
+        if value:
             # 集約関数を数値にエンコード
             agg_encoding = {
                 'Aggregator.COUNT': 0,
@@ -345,7 +366,7 @@ def encode_or_zero(feature_name, params, feature_statistics):
                 'Aggregator.MAX': 4,
                 None: 5  # 集約なし
             }
-            enc_value = agg_encoding.get(agg_value, 5)
+            enc_value = agg_encoding.get(value, 5)
             return float(enc_value)
         else:
             return 5.0  # 集約なし

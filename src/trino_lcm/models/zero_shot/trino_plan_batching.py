@@ -98,17 +98,23 @@ def encode(column, plan_params, feature_statistics):
         # 未知の値が見つかった場合は安全なデフォルト値を使用
         if str(value) not in value_dict:
             no_vals = feature_statistics[column].get('no_vals', len(value_dict))
+            # 値がNone、空、または0（整数）の場合、警告を出さずにデフォルト値を使用
+            # これらは通常、欠損値やデフォルト値として扱われる
+            should_warn = value is not None and value != 0 and str(value).strip() != '' and str(value) != '0'
+            
             # デフォルト値として0を使用（通常は最も一般的な値）
             if 0 in value_dict.values():
                 # 値が0のキーを探す
                 default_key = [k for k, v in value_dict.items() if v == 0][0]
                 enc_value = 0
-                print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using default index 0 (mapped from '{default_key}')")
+                if should_warn:
+                    print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using default index 0 (mapped from '{default_key}')")
             else:
                 # 0が存在しない場合は、最小インデックスを使用
                 min_index = min(value_dict.values()) if value_dict else 0
                 enc_value = min_index
-                print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using minimum index {min_index} (no_vals={no_vals})")
+                if should_warn:
+                    print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using minimum index {min_index} (no_vals={no_vals})")
         else:
             enc_value = value_dict[str(value)]
     else:

@@ -129,7 +129,10 @@ class TrinoZeroShotModel(FcOutModel):
                     pass_directions.append(pd_all_predicates)
 
             # フィルターカラムと出力カラムからプランへ
-            pass_directions.append(PassDirection(model_name='to_plan', g=g, e_name='to_plan'))
+            # allow_empty=True により、テーブルがないプランでもエラーにならない
+            pd_to_plan = PassDirection(model_name='to_plan', g=g, e_name='to_plan', allow_empty=True)
+            if len(pd_to_plan.etypes) > 0:
+                pass_directions.append(pd_to_plan)
 
             # プランの深い方から浅い方へのメッセージパッシング
             for d in reversed(range(g.max_depth)):
