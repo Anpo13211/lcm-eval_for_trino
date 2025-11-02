@@ -13,18 +13,43 @@ from training.preprocessing.feature_statistics import FeatureType
 
 
 def encode(column, plan_params, feature_statistics):
-    #  fallback in case actual cardinality is not in plan parameters
-    if column == 'act_card' and column not in plan_params:
-        value = 0
+    """特徴量をエンコードする（dict/SimpleNamespace両対応）"""
+    # SimpleNamespace統一により、dict/SimpleNamespace両対応
+    use_dict = isinstance(plan_params, dict)
+    
+    # fallback in case actual cardinality is not in plan parameters
+    if column == 'act_card' or column == 'act_output_rows':
+        if use_dict:
+            has_value = column in plan_params
+        else:
+            has_value = hasattr(plan_params, column)
+        
+        if not has_value:
+            value = 0
+        else:
+            value = plan_params[column] if use_dict else getattr(plan_params, column, 0)
     else:
-        value = plan_params[column]
+        value = plan_params[column] if use_dict else getattr(plan_params, column, 0)
+    
     if feature_statistics[column].get('type') == str(FeatureType.numeric):
         enc_value = feature_statistics[column]['scaler'].transform(np.array([[value]])).item()
     elif feature_statistics[column].get('type') == str(FeatureType.categorical):
         value_dict = feature_statistics[column]['value_dict']
         if isinstance(value, list) and len(value) == 1:
             value = value[0]
-        enc_value = value_dict[str(value)]
+        
+        # 未知の値の処理（Trino版と同様）
+        if str(value) not in value_dict:
+            no_vals = feature_statistics[column].get('no_vals', len(value_dict))
+            # デフォルト値として0を使用（通常は最も一般的な値）
+            if 0 in value_dict.values():
+                enc_value = 0
+            else:
+                # 0が存在しない場合は、最小インデックスを使用
+                min_index = min(value_dict.values()) if value_dict else 0
+                enc_value = min_index
+        else:
+            enc_value = value_dict[str(value)]
     else:
         raise NotImplementedError
     return enc_value
@@ -83,8 +108,17 @@ def plan_to_graph(node: PlanOperator, database_id, plan_depths, plan_features, p
     plan_node_id = len(plan_depths)
     plan_depths.append(depth)
 
-    # add plan features（plan_params: 辞書）
-    plan_params = vars(node.plan_parameters)
+    # add plan features（SimpleNamespace統一により、dict/SimpleNamespace両対応）
+    plan_params = node.plan_parameters
+    use_dict = isinstance(plan_params, dict)
+    
+    # ヘルパー関数: plan_parametersから値を取得（dict/SimpleNamespace両対応）
+    def get_param(key, default=None):
+        return plan_params.get(key, default) if use_dict else getattr(plan_params, key, default)
+    
+    def has_param(key):
+        return key in plan_params if use_dict else hasattr(plan_params, key)
+    
     curr_plan_features = [encode(column, plan_params, feature_statistics) for column in plan_featurization.PLAN_FEATURES]
     plan_features.append(curr_plan_features)
 
@@ -103,7 +137,7 @@ def plan_to_graph(node: PlanOperator, database_id, plan_depths, plan_features, p
     # ... 他の出力カラム
 ]
     """
-    output_columns = plan_params.get('output_columns')
+    output_columns = get_param('output_columns')
     if output_columns is not None:
         for output_column in output_columns:
             output_column_node_id = output_column_idx.get(
@@ -111,7 +145,8 @@ def plan_to_graph(node: PlanOperator, database_id, plan_depths, plan_features, p
 
             # if not, create
             if output_column_node_id is None:
-                curr_output_column_features = [encode(column, vars(output_column), feature_statistics)
+                # encode()は既にdict/SimpleNamespace両対応なので、vars()不要
+                curr_output_column_features = [encode(column, output_column, feature_statistics)
                                                for column in plan_featurization.OUTPUT_COLUMN_FEATURES]
 
                 output_column_node_id = len(output_column_features)
@@ -125,8 +160,9 @@ def plan_to_graph(node: PlanOperator, database_id, plan_depths, plan_features, p
                 for column in output_column.columns:
                     column_node_id = column_idx.get((column, database_id))
                     if column_node_id is None:
+                        # encode()は既にdict/SimpleNamespace両対応なので、vars()不要
                         curr_column_features = [
-                            encode(feature_name, vars(db_column_features[column]), feature_statistics)
+                            encode(feature_name, db_column_features[column], feature_statistics)
                             for feature_name in plan_featurization.COLUMN_FEATURES]
                         column_node_id = len(column_features)
                         column_features.append(curr_column_features)
@@ -138,7 +174,7 @@ def plan_to_graph(node: PlanOperator, database_id, plan_depths, plan_features, p
 
     # filter_columns (we do not reference the filter columns to columns since we anyway have to create a node per filter
     #  node)
-    filter_column = plan_params.get('filter_columns')
+    filter_column = get_param('filter_columns')
     if filter_column is not None:
         db_column_features = db_statistics[database_id].column_stats
 
@@ -150,13 +186,14 @@ def plan_to_graph(node: PlanOperator, database_id, plan_depths, plan_features, p
                          logical_preds, plan_node_id=plan_node_id)
 
     # tables
-    table = plan_params.get('table')
+    table = get_param('table')
     if table is not None:
         table_node_id = table_idx.get((table, database_id))
         db_table_statistics = db_statistics[database_id].table_stats
 
         if table_node_id is None:
-            curr_table_features = [encode(feature_name, vars(db_table_statistics[table]), feature_statistics)
+            # encode()は既にdict/SimpleNamespace両対応なので、vars()不要
+            curr_table_features = [encode(feature_name, db_table_statistics[table], feature_statistics)
                                    for feature_name in plan_featurization.TABLE_FEATURES]
             table_node_id = len(table_features)
             table_features.append(curr_table_features)
@@ -197,12 +234,13 @@ def parse_predicates(db_column_features, feature_statistics, filter_column: Pred
 
     # gather features
     if filter_column.operator in {str(op) for op in list(Operator)}:
-        curr_filter_features = [encode(feature_name, vars(filter_column), feature_statistics)
+        # encode()は既にdict/SimpleNamespace両対応なので、vars()不要
+        curr_filter_features = [encode(feature_name, filter_column, feature_statistics)
                                 for feature_name in plan_featurization.FILTER_FEATURES]
 
         if filter_column.column is not None:
             curr_filter_col_feats = [
-                encode(column, vars(db_column_features[filter_column.column]), feature_statistics)
+                encode(column, db_column_features[filter_column.column], feature_statistics)
                 for column in plan_featurization.COLUMN_FEATURES]
         # hack for cases in which we have no base filter column (e.g., in a having clause where the column is some
         # result column of a subquery/groupby). In the future, this should be replaced by some graph model that also
@@ -216,7 +254,8 @@ def parse_predicates(db_column_features, feature_statistics, filter_column: Pred
     else:
         # AND, OR　などの論理述語の場合
         # 論理述語などはカラムを持たないからカラム情報を curr_filter_features に追加しない
-        curr_filter_features = [encode(feature_name, vars(filter_column), feature_statistics)
+        # encode()は既にdict/SimpleNamespace両対応なので、vars()不要
+        curr_filter_features = [encode(feature_name, filter_column, feature_statistics)
                                 for feature_name in plan_featurization.FILTER_FEATURES]
         logical_preds.append(True)
 

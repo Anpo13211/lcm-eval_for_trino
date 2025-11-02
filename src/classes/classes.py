@@ -23,12 +23,13 @@ from models.zeroshot.postgres_plan_batching import postgres_plan_collator
 
 class TrainingServers:
     load_dotenv()
-    NODE00 = ast.literal_eval(os.getenv("NODE00"))
-    NODE01 = ast.literal_eval(os.getenv("NODE01"))
-    NODE02 = ast.literal_eval(os.getenv("NODE02"))
-    NODE03 = ast.literal_eval(os.getenv("NODE03"))
-    NODE04 = ast.literal_eval(os.getenv("NODE04"))
-    NODE05 = ast.literal_eval(os.getenv("NODE05"))
+    # 環境変数がNoneの場合は空の辞書をデフォルト値として使用
+    NODE00 = ast.literal_eval(os.getenv("NODE00", "{}"))
+    NODE01 = ast.literal_eval(os.getenv("NODE01", "{}"))
+    NODE02 = ast.literal_eval(os.getenv("NODE02", "{}"))
+    NODE03 = ast.literal_eval(os.getenv("NODE03", "{}"))
+    NODE04 = ast.literal_eval(os.getenv("NODE04", "{}"))
+    NODE05 = ast.literal_eval(os.getenv("NODE05", "{}"))
 
 
 class InputFormats:

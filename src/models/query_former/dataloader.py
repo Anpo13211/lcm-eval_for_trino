@@ -216,15 +216,27 @@ def recursively_convert_plan(plan: SimpleNamespace,
                              dim_bitmaps: int = 1000,
                              max_filter_number: int = 5,
                              histogram_bin_size: int = 10) -> TreeNode:
-    # vars() で SimpleNamespace を辞書に変換
-    plan_parameters = vars(plan.plan_parameters)
+    # SimpleNamespace統一により、直接plan.plan_parametersにアクセス
+    # 後方互換性のため、dict/SimpleNamespace両対応
+    plan_parameters = plan.plan_parameters
+    use_dict = isinstance(plan_parameters, dict)
+    
+    def get_param(key, default=None):
+        """plan_parametersから値を取得（dict/SimpleNamespace両対応）"""
+        return plan_parameters.get(key, default) if use_dict else getattr(plan_parameters, key, default)
+    
+    def has_param(key):
+        """plan_parametersにキーが存在するかチェック"""
+        return key in plan_parameters if use_dict else hasattr(plan_parameters, key)
 
     # 1. Get operator type and type id
-    operator_name = plan_parameters.get('op_name', 'Unknown')
-    operator_type_id = feature_statistics['op_name']['value_dict'][operator_name]
+    operator_name = get_param('op_name', 'Unknown')
+    operator_type_id = feature_statistics['op_name']['value_dict'].get(operator_name, 0)
 
     # 2. Get table name (encode to numeric ID)
-    table_name_raw = plan_parameters.get('tablename', None)
+    # tablenameがない場合、table属性をフォールバックとして使用
+    table_name_raw = get_param('tablename', None) or get_param('table', None)
+    
     if isinstance(table_name_raw, int):
         table_name = table_name_raw
     elif isinstance(table_name_raw, str):
@@ -233,9 +245,9 @@ def recursively_convert_plan(plan: SimpleNamespace,
             value_dict = feature_statistics.get('tablename', {}).get('value_dict', {})
         except Exception:
             value_dict = {}
-        table_name = value_dict.get(table_name_raw, feature_statistics['tablename']['no_vals'] + 1)
+        table_name = value_dict.get(table_name_raw, feature_statistics.get('tablename', {}).get('no_vals', 0) + 1)
     else:
-        table_name = feature_statistics['tablename']['no_vals'] + 1  # dummy table
+        table_name = feature_statistics.get('tablename', {}).get('no_vals', 0) + 1  # dummy table
 
     # Parse and encode filters and sample vectors.
     # Each operator has a filter according to the original code. It however can be "empty"
@@ -246,7 +258,7 @@ def recursively_convert_plan(plan: SimpleNamespace,
                                ).reshape(1, 3)
 
     histogram_info = np.empty([], dtype=float)
-    filter_columns = plan_parameters.get('filter_columns', None)
+    filter_columns = get_param('filter_columns', None)
     if filter_columns is not None:
         # filter_columnsが辞書の場合はSimpleNamespaceに変換
         if isinstance(filter_columns, dict):
@@ -267,7 +279,7 @@ def recursively_convert_plan(plan: SimpleNamespace,
         filter_info = parse_filter_information(filter_columns=filter_columns)
         assert len(filter_info) <= max_filter_number, f"Filter number exceeds max filter number, {filter_info}"
         # Get sample vector
-        sample_bitmap_vec = get_sample_vector(sample_bitmap_vec=plan_parameters.get('sample_vec', None),
+        sample_bitmap_vec = get_sample_vector(sample_bitmap_vec=get_param('sample_vec', None),
                                               dim_bitmaps=dim_bitmaps)
 
         encoded_filter_info = get_encoded_filter(filter_info=filter_info,

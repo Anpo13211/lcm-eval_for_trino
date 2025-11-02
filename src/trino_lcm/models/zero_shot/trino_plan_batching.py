@@ -77,49 +77,8 @@ def load_database_statistics(
     return stats
 
 
-def encode(column, plan_params, feature_statistics):
-    """特徴量をエンコードする"""
-    # fallback in case actual cardinality is not in plan parameters
-    # SimpleNamespace 統一後は hasattr を使用
-    if column == 'act_output_rows' and not hasattr(plan_params, column):
-        value = 0
-    else:
-        value = getattr(plan_params, column, 0)
-    
-    if feature_statistics[column].get('type') == str(FeatureType.numeric):
-        enc_value = feature_statistics[column]['scaler'].transform(np.array([[value]])).item()
-    elif feature_statistics[column].get('type') == str(FeatureType.categorical):
-        value_dict = feature_statistics[column]['value_dict']
-        if isinstance(value, list) and len(value) == 1:
-            value = value[0]
-        
-        # 未知の演算子名の処理
-        # モデル初期化後の動的追加はembeddingテーブルサイズ不足の原因になるため、
-        # 未知の値が見つかった場合は安全なデフォルト値を使用
-        if str(value) not in value_dict:
-            no_vals = feature_statistics[column].get('no_vals', len(value_dict))
-            # 値がNone、空、または0（整数）の場合、警告を出さずにデフォルト値を使用
-            # これらは通常、欠損値やデフォルト値として扱われる
-            should_warn = value is not None and value != 0 and str(value).strip() != '' and str(value) != '0'
-            
-            # デフォルト値として0を使用（通常は最も一般的な値）
-            if 0 in value_dict.values():
-                # 値が0のキーを探す
-                default_key = [k for k, v in value_dict.items() if v == 0][0]
-                enc_value = 0
-                if should_warn:
-                    print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using default index 0 (mapped from '{default_key}')")
-            else:
-                # 0が存在しない場合は、最小インデックスを使用
-                min_index = min(value_dict.values()) if value_dict else 0
-                enc_value = min_index
-                if should_warn:
-                    print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using minimum index {min_index} (no_vals={no_vals})")
-        else:
-            enc_value = value_dict[str(value)]
-    else:
-        raise NotImplementedError
-    return enc_value
+# encode()関数はPostgreSQL版の統一実装を使用
+from models.zeroshot.postgres_plan_batching import encode
 
 
 def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_features, plan_to_plan_edges, db_statistics, feature_statistics,
@@ -174,25 +133,33 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
 
     db_column_stats = getattr(db_stats, 'column_stats', None) if db_stats is not None else None
 
-    # プランの特徴量を抽出
+    # プランの特徴量を抽出（統一されたencode()を使用）
+    # PostgreSQL版と同様のロジックで、plan_featurization.PLAN_FEATURESを使用
+    plan_params = node.plan_parameters
+    use_dict = isinstance(plan_params, dict)
+    
+    # ヘルパー関数: plan_parametersから値を取得（dict/SimpleNamespace両対応）
+    def get_param(key, default=None):
+        return plan_params.get(key, default) if use_dict else getattr(plan_params, key, default)
+    
+    # PostgreSQL版と同じ形式で特徴量を抽出
+    # TrinoではVARIABLES['plan']の代わりにPLAN_FEATURESを使用
     plan_feat = []
-    for feat_name in plan_featurization.VARIABLES['plan']:
-        if hasattr(node.plan_parameters, feat_name):
-            # Trinoの特徴量名をPostgreSQL互換に変換
-            if feat_name == 'act_output_rows':
-                # PostgreSQLのact_cardに対応
-                value = getattr(node.plan_parameters, feat_name)
-            elif feat_name == 'est_rows':
-                # PostgreSQLのest_cardに対応
-                value = getattr(node.plan_parameters, feat_name)
-            else:
-                value = getattr(node.plan_parameters, feat_name)
-            
-            enc_value = encode(feat_name, node.plan_parameters, feature_statistics)
+    if hasattr(plan_featurization, 'PLAN_FEATURES'):
+        # PostgreSQL形式
+        for feat_name in plan_featurization.PLAN_FEATURES:
+            enc_value = encode(feat_name, plan_params, feature_statistics)
             plan_feat.append(enc_value)
-        else:
-            # デフォルト値
-            plan_feat.append(0.0)
+    elif hasattr(plan_featurization, 'VARIABLES') and 'plan' in plan_featurization.VARIABLES:
+        # Trino形式（後方互換性）
+        for feat_name in plan_featurization.VARIABLES['plan']:
+            if hasattr(plan_params, feat_name) if not use_dict else feat_name in plan_params:
+                enc_value = encode(feat_name, plan_params, feature_statistics)
+                plan_feat.append(enc_value)
+            else:
+                plan_feat.append(0.0)
+    else:
+        raise ValueError(f"plan_featurizationにPLAN_FEATURESまたはVARIABLES['plan']が見つかりません")
     
     plan_features.append(plan_feat)
     
@@ -327,17 +294,31 @@ def encode_or_zero(feature_name, params, feature_statistics):
     if params is None:
         return 0.0
 
-    if isinstance(params, PredicateNode):
-        params = vars(params)
-    elif not isinstance(params, dict):
-        params = vars(params)
-
-    if feature_name not in params:
+    # SimpleNamespace統一により、encode()はdict/SimpleNamespace両対応
+    # PredicateNodeやSimpleNamespaceの場合は直接渡す（encode()内で処理される）
+    use_dict = isinstance(params, dict) or (isinstance(params, PredicateNode) and hasattr(params, '__dict__'))
+    
+    # 値の存在確認（dict/SimpleNamespace両対応）
+    has_value = False
+    if isinstance(params, dict):
+        has_value = feature_name in params
+    elif isinstance(params, PredicateNode):
+        # PredicateNodeはSimpleNamespaceのような属性アクセス
+        has_value = hasattr(params, feature_name)
+    else:
+        has_value = hasattr(params, feature_name)
+    
+    if not has_value:
         return 0.0
 
     # aggregation特徴量の特別処理
     if feature_name == 'aggregation':
-        agg_value = params[feature_name]
+        # 値を取得（dict/SimpleNamespace両対応）
+        if isinstance(params, dict):
+            agg_value = params[feature_name]
+        else:
+            agg_value = getattr(params, feature_name, None)
+        
         if agg_value:
             # 集約関数を数値にエンコード
             agg_encoding = {
@@ -354,8 +335,9 @@ def encode_or_zero(feature_name, params, feature_statistics):
             return 5.0  # 集約なし
 
     try:
+        # 統一されたencode()を使用（dict/SimpleNamespace両対応）
         return encode(feature_name, params, feature_statistics)
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, AttributeError):
         return 0.0
 
 
