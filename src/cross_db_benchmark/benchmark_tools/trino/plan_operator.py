@@ -459,14 +459,33 @@ class TrinoPlanOperator(AbstractPlanOperator):
         if not self._has_param('workers_planned'):
             self._set_param('workers_planned', 0)
         
-        # Trino には est_cost がないので None
-        self._set_param('est_cost', None)
-        self._set_param('est_startup_cost', None)
+        # est_cost: Trinoにはest_costがないが、est_cpu（Estimatesのcpu値）をest_costの代わりとして使用
+        # est_cpuは推定値なので、PostgreSQLのest_costと意味的に近い
+        # フォールバック: est_cpuがない場合はact_cpu_timeを使用、それもなければact_scheduled_time、それもなければ0.0
+        if self._has_param('est_cpu'):
+            est_cpu = self._get_param('est_cpu')
+            self._set_param('est_cost', est_cpu)
+        elif self._has_param('act_cpu_time'):
+            act_cpu_time = self._get_param('act_cpu_time')
+            self._set_param('est_cost', act_cpu_time)
+        elif self._has_param('act_scheduled_time'):
+            act_scheduled_time = self._get_param('act_scheduled_time')
+            self._set_param('est_cost', act_scheduled_time)
+        else:
+            self._set_param('est_cost', 0.0)
         
-        # act_time は CPU時間から推定
+        # act_time は実際のCPU時間から設定
         if self._has_param('act_cpu_time'):
             act_cpu_time = self._get_param('act_cpu_time')
             self._set_param('act_time', act_cpu_time)
+        elif self._has_param('act_scheduled_time'):
+            act_scheduled_time = self._get_param('act_scheduled_time')
+            self._set_param('act_time', act_scheduled_time)
+        else:
+            self._set_param('act_time', 0)
+        
+        # est_startup_cost は Trino にはない
+        self._set_param('est_startup_cost', None)
         
         # 子ノードのカーディナリティは後で計算される
         self._set_param('act_children_card', 1.0)

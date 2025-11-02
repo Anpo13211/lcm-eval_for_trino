@@ -45,6 +45,10 @@ from classes.classes import DACEModelConfig, DataLoaderOptions
 from classes.workload_runs import WorkloadRuns
 from training.training.metrics import QError, RMSE
 from training.featurizations import DACEFeaturization
+from training.preprocessing.feature_statistics import FeatureType
+from trino_lcm.scripts.train_zeroshot import load_plans_from_files
+from sklearn.preprocessing import RobustScaler
+import collections
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,20 +63,33 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         nargs='+',
         required=True,
-        help='Paths to workload run JSON files for training'
+        help='Paths to workload run files (JSON or Trino .txt files) for training'
     )
     parser.add_argument(
         '--test_workload_runs',
         type=str,
         nargs='+',
         default=None,
-        help='Paths to workload run JSON files for testing'
+        help='Paths to workload run files (JSON or Trino .txt files) for testing'
     )
     parser.add_argument(
         '--statistics_file',
         type=str,
-        required=True,
-        help='Path to feature statistics JSON file'
+        default=None,
+        help='Path to feature statistics JSON file (optional, will be auto-generated if not provided)'
+    )
+    parser.add_argument(
+        '--train_files',
+        type=str,
+        nargs='+',
+        default=None,
+        help='Paths to Trino EXPLAIN ANALYZE .txt files for training (used to generate statistics if --statistics_file not provided)'
+    )
+    parser.add_argument(
+        '--max_plans_per_file',
+        type=int,
+        default=None,
+        help='Maximum number of plans to parse per file (for statistics generation)'
     )
     parser.add_argument(
         '--val_ratio',
@@ -235,9 +252,27 @@ def validate(model, val_loader, device):
     all_predictions = np.array(all_predictions)
     all_labels = np.array(all_labels)
     
+    # デバッグ: 予測値とラベルの統計を出力
+    print(f"\n🔍 検証データの統計:")
+    print(f"   予測値の範囲: [{all_predictions.min():.4f}, {all_predictions.max():.4f}]")
+    print(f"   予測値の平均: {all_predictions.mean():.4f}")
+    print(f"   予測値が0以下の数: {(all_predictions <= 0).sum()} / {len(all_predictions)}")
+    print(f"   ラベルの範囲: [{all_labels.min():.4f}, {all_labels.max():.4f}]")
+    print(f"   ラベルの平均: {all_labels.mean():.4f}")
+    print(f"   ラベルが0以下の数: {(all_labels <= 0).sum()} / {len(all_labels)}")
+    print()
+    
+    # 予測値が0以下の場合、最小値を設定（Q-Error計算のため）
+    # クエリプランの実行時間は100ms（0.1秒）～30秒の範囲
+    # PostgreSQLのQErrorデフォルト値（0.1）に合わせる
+    min_val = 0.1  # 0.1秒 = 100ミリ秒
+    all_predictions = np.clip(all_predictions, min_val, np.inf)
+    all_labels = np.clip(all_labels, min_val, np.inf)
+    
     # メトリクス計算
     # QError と RMSE は Metric クラスを継承しているので evaluate_metric を使用
-    q_error_metric = QError()
+    # QErrorのデフォルトmin_valは0.1なので、それに合わせる
+    q_error_metric = QError(min_val=min_val)
     rmse_metric = RMSE()
     
     # evaluate_metric メソッドを呼び出す
@@ -245,12 +280,159 @@ def validate(model, val_loader, device):
     rmse_value = rmse_metric.evaluate_metric(labels=all_labels, preds=all_predictions)
     
     # Noneの場合のフォールバック
-    if q_error_value is None:
+    if q_error_value is None or np.isnan(q_error_value) or np.isinf(q_error_value):
         q_error_value = float('inf')
-    if rmse_value is None:
+    if rmse_value is None or np.isnan(rmse_value) or np.isinf(rmse_value):
         rmse_value = float('inf')
     
     return q_error_value, rmse_value
+
+
+def generate_feature_statistics_from_plans(
+    plan_files: list[str],
+    output_path: Path,
+    plan_features: list[str],
+    max_plans_per_file: Optional[int] = None
+) -> Path:
+    """
+    Trinoプランファイルから特徴量統計を生成してJSONファイルとして保存
+    
+    Args:
+        plan_files: Trino EXPLAIN ANALYZE .txtファイルのパスリスト
+        output_path: 統計ファイルの保存先パス
+        plan_features: 収集する特徴量のリスト（例: ["op_name", "est_card"]）
+        max_plans_per_file: ファイルあたりの最大プラン数
+    
+    Returns:
+        保存された統計ファイルのパス
+    """
+    print("=" * 80)
+    print("特徴量統計の生成")
+    print("=" * 80)
+    print(f"プランファイル: {plan_files}")
+    print(f"収集する特徴量: {plan_features}")
+    print()
+    
+    # プランを読み込み
+    print("📂 プランの読み込み中...")
+    all_plans = load_plans_from_files(plan_files, max_plans_per_file)
+    print(f"✅ {len(all_plans)} 個のプランを読み込み完了\n")
+    
+    # 特徴量の値を収集
+    print("📊 特徴量の値を収集中...")
+    value_dict = collections.defaultdict(list)
+    
+    def collect_features_recursively(node):
+        """再帰的にノードから特徴量を収集"""
+        if hasattr(node, 'plan_parameters'):
+            params = node.plan_parameters
+            if isinstance(params, dict):
+                # dict の場合
+                for feat in plan_features:
+                    if feat in params:
+                        value = params[feat]
+                        if value is not None:
+                            value_dict[feat].append(value)
+            else:
+                # SimpleNamespace の場合
+                for feat in plan_features:
+                    # Trino固有のマッピング
+                    if feat == "est_card":
+                        # est_card は est_rows から取得
+                        value = getattr(params, "est_rows", None)
+                        if value is not None:
+                            value_dict[feat].append(value)
+                    elif feat == "est_cost":
+                        # est_cost は est_cpu を優先（Estimatesのcpu値、推定値なのでより適切）
+                        # フォールバック: est_cpuがない場合はact_cpu_timeを使用、それもなければact_scheduled_time、それもなければ0.0
+                        value = getattr(params, "est_cpu", None)
+                        if value is None:
+                            value = getattr(params, "act_cpu_time", None)
+                        if value is None:
+                            value = getattr(params, "act_scheduled_time", None)
+                        if value is None:
+                            value = 0.0
+                        value_dict[feat].append(value)
+                    else:
+                        # その他の特徴量
+                        if hasattr(params, feat):
+                            value = getattr(params, feat)
+                            if value is not None:
+                                value_dict[feat].append(value)
+        
+        # 子ノードも再帰的に処理
+        for child in node.children:
+            collect_features_recursively(child)
+    
+    for plan in tqdm(all_plans, desc="プラン処理"):
+        collect_features_recursively(plan)
+    
+    print()
+    
+    # 統計を計算
+    print("📈 統計を計算中...")
+    statistics_dict = {}
+    
+    for feat_name, values in value_dict.items():
+        values = [v for v in values if v is not None]
+        if len(values) == 0:
+            continue
+        
+        # 数値型かどうかを判定
+        if all([isinstance(v, (int, float)) for v in values]):
+            # 数値型: RobustScaler を使用
+            scaler = RobustScaler()
+            np_values = np.array(values, dtype=np.float32).reshape(-1, 1)
+            scaler.fit(np_values)
+            
+            statistics_dict[feat_name] = {
+                "max": float(np_values.max()),
+                "scale": float(scaler.scale_.item()),
+                "center": float(scaler.center_.item()),
+                "type": str(FeatureType.numeric)
+            }
+        else:
+            # カテゴリカル型: value_dict を作成
+            unique_values = sorted(set(str(v) for v in values))
+            statistics_dict[feat_name] = {
+                "value_dict": {v: idx for idx, v in enumerate(unique_values)},
+                "no_vals": len(unique_values),
+                "type": str(FeatureType.categorical)
+            }
+    
+    # 指定された特徴量で、収集されなかったもの（Trinoには存在しない特徴量）を追加
+    for feat_name in plan_features:
+        if feat_name not in statistics_dict:
+            # 特徴量が存在しない場合は、デフォルト値で統計を追加
+            if feat_name == 'est_cost':
+                # est_costはTrinoにはないので、デフォルト値0で追加
+                statistics_dict[feat_name] = {
+                    "max": 0.0,
+                    "scale": 1.0,  # スケール1.0で0を中心に
+                    "center": 0.0,
+                    "type": str(FeatureType.numeric)
+                }
+                print(f"   ⚠️  {feat_name} がTrinoプランに存在しないため、デフォルト値0で追加しました")
+            else:
+                # その他の欠損特徴量もデフォルト値で追加
+                statistics_dict[feat_name] = {
+                    "max": 0.0,
+                    "scale": 1.0,
+                    "center": 0.0,
+                    "type": str(FeatureType.numeric)
+                }
+                print(f"   ⚠️  {feat_name} が収集されなかったため、デフォルト値0で追加しました")
+    
+    # JSONファイルとして保存
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w') as f:
+        json.dump(statistics_dict, f, indent=2)
+    
+    print(f"✅ 統計ファイルを保存: {output_path}")
+    print(f"   特徴量数: {len(statistics_dict)}")
+    print()
+    
+    return output_path
 
 
 def run(args) -> int:
@@ -269,16 +451,8 @@ def run(args) -> int:
     print(f"Using device: {device}")
     print()
     
-    # ワークロード設定
-    train_workload_runs = [Path(p) for p in args.workload_runs]
-    test_workload_runs = [Path(p) for p in args.test_workload_runs] if args.test_workload_runs else []
-    
-    workload_runs = WorkloadRuns(
-        train_workload_runs=train_workload_runs,
-        test_workload_runs=test_workload_runs
-    )
-    
-    # モデル設定
+    # モデル設定（featurizationを先に作成）
+    featurization = DACEFeaturization()
     model_config = DACEModelConfig(
         batch_size=args.batch_size,
         hidden_dim=args.hidden_dim,
@@ -290,8 +464,62 @@ def run(args) -> int:
         device=device,
         loss_class_name='DaceLoss',
         cap_training_samples=args.cap_training_samples,
-        featurization=DACEFeaturization(),
+        featurization=featurization,
         optimizer_kwargs=dict(lr=args.learning_rate)
+    )
+    
+    # 統計ファイルの処理
+    statistics_file = Path(args.statistics_file) if args.statistics_file else None
+    
+    if statistics_file is None or not statistics_file.exists():
+        # 統計ファイルが指定されていない、または存在しない場合は自動生成
+        # --train_filesが指定されている場合はそれを使用、なければ--workload_runsから.txtファイルを探す
+        stat_files = args.train_files
+        if not stat_files:
+            # --workload_runsから.txtファイルを抽出
+            stat_files = [f for f in args.workload_runs if Path(f).suffix.lower() == '.txt']
+        
+        if not stat_files:
+            raise ValueError(
+                "統計ファイルが指定されていません。以下のいずれかを指定してください:\n"
+                "  1. --statistics_file: 既存の統計ファイルのパス\n"
+                "  2. --train_files: 統計生成用のTrinoプランファイル（.txt）のパス\n"
+                "  3. --workload_runs に .txt ファイルを含める（自動的に統計生成に使用されます）"
+            )
+        
+        # 自動生成する統計ファイルのパス
+        auto_stats_path = output_dir / 'feature_statistics.json'
+        
+        # 統計を生成（featurizationで指定された全ての特徴量を含める）
+        # Trinoにはない特徴量（est_cost）も統計ファイルに含め、デフォルト値0で処理する
+        plan_features = list(featurization.PLAN_FEATURES)
+        
+        # Trino固有のマッピング: est_card は est_rows から取得
+        if 'est_card' not in plan_features and 'est_rows' in plan_features:
+            # est_rows があれば est_card に変換して処理
+            pass  # 統計生成時に適切にマッピングされる
+        
+        generate_feature_statistics_from_plans(
+            plan_files=stat_files,
+            output_path=auto_stats_path,
+            plan_features=plan_features,
+            max_plans_per_file=args.max_plans_per_file
+        )
+        
+        # generate_feature_statistics_from_plans 内で既に不足している特徴量が追加されているので、
+        # ここでは確認のみ
+        statistics_file = auto_stats_path
+    else:
+        print(f"既存の統計ファイルを使用: {statistics_file}")
+        print()
+    
+    # ワークロード設定
+    train_workload_runs = [Path(p) for p in args.workload_runs]
+    test_workload_runs = [Path(p) for p in args.test_workload_runs] if args.test_workload_runs else []
+    
+    workload_runs = WorkloadRuns(
+        train_workload_runs=train_workload_runs,
+        test_workload_runs=test_workload_runs
     )
     
     # データローダー設定
@@ -303,7 +531,7 @@ def run(args) -> int:
     
     print("Creating dataloaders...")
     feature_statistics, train_loader, val_loader, test_loaders = create_dace_dataloader(
-        statistics_file=Path(args.statistics_file),
+        statistics_file=statistics_file,
         model_config=model_config,
         workload_runs=workload_runs,
         dataloader_options=dataloader_options

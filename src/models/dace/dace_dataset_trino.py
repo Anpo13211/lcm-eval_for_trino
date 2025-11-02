@@ -216,24 +216,94 @@ def get_loss_mask_trino(seq_length: int,
 
 
 def read_workload_run(workload_run: Path) -> list[SimpleNamespace]:
+    """
+    Workload runを読み込む（JSONまたはTXTファイル対応）
+    
+    JSONファイルの場合: 従来通りJSONから読み込む
+    TXTファイルの場合: TrinoのEXPLAIN ANALYZE形式から直接読み込む
+    """
+    workload_path = Path(workload_run)
+    
+    # ファイル拡張子で判断
+    if workload_path.suffix.lower() == '.txt':
+        # Trinoの.txtファイルから読み込む
+        return read_workload_run_trino(workload_path)
+    else:
+        # JSONファイルから読み込む（従来の方法）
+        plans: list[SimpleNamespace] = []
+        try:
+            run = load_json(str(workload_path))
+        except json.JSONDecodeError:
+            raise ValueError(f"Error reading {workload_run}")
+
+        db_name = workload_path.parent.name  # This is basically the database name
+
+        db_count = 0
+        for plan_id, plan in enumerate(run.parsed_plans):
+            plan.database_id = db_name
+            plan.plan_id = plan_id
+            plans.append(plan)
+            db_count += 1
+
+        print("Database {:s} has {:d} plans.".format(str(db_name), db_count))
+        return plans
+
+
+def read_workload_run_trino(workload_run: Path) -> list[SimpleNamespace]:
+    """
+    TrinoのEXPLAIN ANALYZE .txtファイルからプランを読み込む
+    """
+    from trino_lcm.scripts.train_zeroshot import load_plans_from_files
+    from types import SimpleNamespace
+    
+    # TrinoPlanOperatorのリストを取得
+    trino_plans = load_plans_from_files([str(workload_run)])
+    
+    # TrinoPlanOperatorをSimpleNamespaceに変換
     plans: list[SimpleNamespace] = []
-    try:
-        workload_path = os.path.join(workload_run)
-        run = load_json(workload_path)
-    except json.JSONDecodeError:
-        raise ValueError(f"Error reading {workload_run}")
-
-    db_name = workload_run.parent.name  # This is basically the database name
-
-    db_count = 0
-    for plan_id, plan in enumerate(run.parsed_plans):
-        plan.database_id = db_name
-        plan.plan_id = plan_id
-        plans.append(plan)
-        db_count += 1
-
-    print("Database {:s} has {:d} plans.".format(str(db_name), db_count))
+    db_name = workload_run.parent.name
+    
+    for plan_id, trino_plan in enumerate(trino_plans):
+        # TrinoPlanOperatorをSimpleNamespaceに変換
+        plan_ns = convert_trino_plan_to_namespace(trino_plan)
+        plan_ns.database_id = db_name
+        plan_ns.plan_id = plan_id
+        plans.append(plan_ns)
+    
+    print("Database {:s} has {:d} plans (from Trino .txt file).".format(str(db_name), len(plans)))
     return plans
+
+
+def convert_trino_plan_to_namespace(trino_plan) -> SimpleNamespace:
+    """
+    TrinoPlanOperatorをSimpleNamespaceに変換
+    
+    DACEの関数が期待する形式に変換:
+    - plan.plan_parameters: SimpleNamespace（既にSimpleNamespace）
+    - plan.plan_runtime: 実行時間（ミリ秒）
+    - plan.children: 子ノードのリスト
+    """
+    from types import SimpleNamespace
+    
+    # plan_parametersは既にSimpleNamespaceなのでそのまま使用
+    plan_params = trino_plan.plan_parameters if hasattr(trino_plan, 'plan_parameters') else SimpleNamespace()
+    
+    # plan_runtimeを取得（ミリ秒）
+    plan_runtime = getattr(trino_plan, 'plan_runtime', 0)
+    
+    # 子ノードを再帰的に変換
+    children = []
+    if hasattr(trino_plan, 'children') and trino_plan.children:
+        for child in trino_plan.children:
+            children.append(convert_trino_plan_to_namespace(child))
+    
+    # SimpleNamespaceを作成
+    plan_ns = SimpleNamespace()
+    plan_ns.plan_parameters = plan_params
+    plan_ns.plan_runtime = plan_runtime
+    plan_ns.children = children
+    
+    return plan_ns
 
 
 def scale_feature_trino(feature_statistics: dict, feature: str, node_params: SimpleNamespace) -> np.ndarray:
@@ -248,6 +318,11 @@ def scale_feature_trino(feature_statistics: dict, feature: str, node_params: Sim
     Returns:
         スケーリング済みの特徴量
     """
+    # 統計ファイルに存在しない特徴量の場合はデフォルト値0を返す
+    if feature not in feature_statistics:
+        # Trinoにはない特徴量（例: est_cost）の場合は0を返す
+        return np.array([[0.0]])
+    
     if feature_statistics[feature]["type"] == str(FeatureType.numeric):
         scaler = feature_statistics[feature]["scaler"]
         
@@ -261,9 +336,15 @@ def scale_feature_trino(feature_statistics: dict, feature: str, node_params: Sim
                 # フォールバック: est_rows を使用
                 attribute = getattr(node_params, "est_rows", 0)
         elif feature == "est_cost":
-            # Trinoでは est_cpu や est_cost に相当するものがない場合があるので、
-            # デフォルト値を使用
-            attribute = getattr(node_params, "est_cost", 0)
+            # Trinoでは est_cpu を優先（Estimatesのcpu値、推定値なのでより適切）
+            # フォールバック: est_cpuがない場合はact_cpu_timeを使用、それもなければact_scheduled_time、それもなければ0.0
+            attribute = getattr(node_params, "est_cpu", None)
+            if attribute is None:
+                attribute = getattr(node_params, "act_cpu_time", None)
+            if attribute is None:
+                attribute = getattr(node_params, "act_scheduled_time", None)
+            if attribute is None:
+                attribute = 0.0
         else:
             attribute = getattr(node_params, feature, 0)
         
@@ -303,8 +384,13 @@ def generate_seqs_encoding_trino(seq: list, op_name_to_one_hot: dict, plan_param
         
         # 他の特徴量を追加してスケーリング
         for feature in plan_parameters[1:]:  # op_name以外
-            feature_encoding = scale_feature_trino(feature_statistics, feature, node_params)
-            seq_encoding.append(feature_encoding)
+            # 統計ファイルに存在する特徴量のみを処理
+            if feature in feature_statistics:
+                feature_encoding = scale_feature_trino(feature_statistics, feature, node_params)
+                seq_encoding.append(feature_encoding)
+            else:
+                # 存在しない特徴量（例: est_cost）の場合は0を返す
+                seq_encoding.append(np.array([[0.0]]))
     
     seq_encoding = np.concatenate(seq_encoding, axis=1)
     return seq_encoding
@@ -410,20 +496,21 @@ def depth_first_search_trino(plan: SimpleNamespace, seq: list, adjs: list,
     heights.append(cur_height)
     
     # Trinoの実行時間を取得
-    # ルートノードの場合はplan_runtimeを使用、それ以外はデフォルト値
+    # ルートノードの場合はplan_runtimeを使用、それ以外は0
     if cur_height == 0 and hasattr(plan, 'plan_runtime'):
         # ルートノードの実行時間（ミリ秒）
         act_time = plan.plan_runtime
     else:
-        # サブノードの実行時間はTrinoでは取得できないので、
-        # デフォルト値を使用（損失計算では使用されない）
-        if hasattr(plan, 'plan_parameters'):
-            # act_cpu_time または act_scheduled_time があれば使用
-            act_time = getattr(plan.plan_parameters, 'act_cpu_time', None)
-            if act_time is None:
-                act_time = getattr(plan.plan_parameters, 'act_scheduled_time', 0.01)
-        else:
-            act_time = 0.01
+        # サブノードの実行時間はTrinoでは取得できないので、0に設定
+        # 損失計算では使用されない（loss_maskが0のため）
+        act_time = 0.0
+
+        # cpu_time を使う場合は以下を使う
+        # if hasattr(plan, 'plan_parameters'):
+        #     # act_cpu_time または act_scheduled_time があれば使用
+        #     act_time = getattr(plan.plan_parameters, 'act_cpu_time', None)
+        #     if act_time is None:
+        #         act_time = getattr(plan.plan_parameters, 'act_scheduled_time', 0.01)
     
     run_times.append(act_time)
 
