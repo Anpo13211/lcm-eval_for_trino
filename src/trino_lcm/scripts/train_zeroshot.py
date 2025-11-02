@@ -44,7 +44,8 @@ import numpy as np
 from tqdm import tqdm
 
 from cross_db_benchmark.benchmark_tools.trino.parse_plan import parse_trino_plans, trino_timing_regex
-from trino_lcm.models.zero_shot import TrinoZeroShotModel, trino_plan_collator, load_database_statistics
+from trino_lcm.models.zero_shot import TrinoZeroShotModel, trino_plan_collator
+from models.zeroshot.trino_plan_batching import load_database_statistics
 from training.featurizations import TrinoTrueCardDetail
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
@@ -76,8 +77,21 @@ class MockQuery:
         self.timeout = False
         self.analyze_plans = [plan_text]  # parse_trino_plansが期待する形式
         
-        # verbose_planはリスト形式で提供（parse_trino_plansが期待する形式）
-        self.verbose_plan = plan_text.split('\n')
+        # verbose_planは文字列形式で提供（parse_trino_raw_plan_v2が期待する形式）
+        self.verbose_plan = plan_text
+        
+        # SQL文を抽出（オプション、プランテキストから抽出を試みる）
+        # 最初の'-- stmt'で始まる行を探す
+        sql_lines = []
+        for line in plan_text.split('\n'):
+            if line.strip().startswith('-- stmt'):
+                # SQL文の行を抽出（次の行から）
+                sql_lines = []
+            elif sql_lines is not None and line.strip() and not line.strip().startswith('--'):
+                sql_lines.append(line.strip())
+                if sql_lines and line.strip().endswith(';'):
+                    break
+        self.sql = ' '.join(sql_lines) if sql_lines else 'SELECT * FROM unknown'  # デフォルトのSQL
         
         # 実行時間を抽出
         execution_time = None
@@ -107,7 +121,16 @@ class MockRunStats:
         self.plans_text = plans_text
         # parse_trino_plansで必要な属性を追加
         self.query_list = [MockQuery(plan_text) for plan_text in plans_text]
-        self.database_stats = {}
+        
+        # database_statsをSimpleNamespace形式で初期化（parse_trino_plans_v2が期待する形式）
+        from types import SimpleNamespace
+        self.database_stats = SimpleNamespace(
+            table_stats=[],  # リスト形式
+            column_stats=[]  # リスト形式
+        )
+        
+        # run_kwargsを追加（parse_trino_plans_v2が期待する形式）
+        self.run_kwargs = {}
     
     def __iter__(self):
         for plan_text in self.plans_text:
@@ -190,7 +213,28 @@ def load_plans_from_files(file_paths, max_plans_per_file=None):
             # MockRunStatsを作成してパース
             mock_stats = MockRunStats(plans_text)
             
-            parsed_runs, _ = parse_trino_plans(
+            # parse_trino_plans_v2を使用（統計情報に対応）
+            from cross_db_benchmark.benchmark_tools.trino.parse_plan import parse_trino_plans_v2
+            
+            # 統計情報を読み込んでdatabase_statsに設定（オプション）
+            # 注意: 統計情報がない場合は空のリストで動作する
+            try:
+                from training.dataset.dataset_creation import read_explain_analyze_txt
+                _, db_stats_from_txt = read_explain_analyze_txt(
+                    file_path,
+                    path_index=file_idx,
+                    limit_per_ds=1  # 統計情報だけ取得
+                )
+                # database_statsを更新（リスト形式に変換）
+                from types import SimpleNamespace
+                mock_stats.database_stats = SimpleNamespace(
+                    table_stats=list(db_stats_from_txt.table_stats.values()) if isinstance(db_stats_from_txt.table_stats, dict) else [],
+                    column_stats=list(db_stats_from_txt.column_stats.values()) if isinstance(db_stats_from_txt.column_stats, dict) else []
+                )
+            except Exception as e:
+                print(f"  ⚠️  統計情報の読み込みに失敗（統計情報なしで続行）: {e}")
+            
+            parsed_runs, _ = parse_trino_plans_v2(
                 mock_stats,
                 min_runtime=0,
                 max_runtime=1000000,
@@ -478,28 +522,47 @@ def main():
     print()
     
     # データベース統計情報を読み込み（オプション）
-    db_statistics = None
+    db_statistics = {}
     if args.catalog and args.schema and args.statistics_dir:
         stats_dir_path = Path(args.statistics_dir) / f"{args.catalog}_{args.schema}"
         if stats_dir_path.exists():
             print("📊 ステップ0: データベース統計情報の読み込み")
-            db_statistics = load_database_statistics(
-                catalog=args.catalog,
-                schema=args.schema,
-                stats_dir=args.statistics_dir
-            )
-            
-            # 統計情報の有無を確認
-            has_stats = (
-                db_statistics.get('table_stats') or 
-                db_statistics.get('column_stats')
-            )
-            
-            if has_stats:
-                print(f"✅ データベース統計情報が利用可能です")
-                print(f"   - テーブル統計: {len(db_statistics.get('table_stats', {}))} テーブル")
-                print(f"   - カラム統計: {len(db_statistics.get('column_stats', {}))} カラム")
-            print()
+            try:
+                loaded_stats = load_database_statistics(
+                    catalog=args.catalog,
+                    schema=args.schema,
+                    stats_dir=args.statistics_dir,
+                    prefer_zero_shot=True  # zero-shot形式を優先
+                )
+                
+                # Postgres形式に変換（trino_plan_collatorが期待する形式）
+                from types import SimpleNamespace
+                
+                # 統計情報をPostgres形式（database_idをキーとする辞書）に変換
+                for file_idx, file_path in enumerate([Path(p.strip()) for p in args.train_files.split(',')] + [Path(args.test_file)]):
+                    # 各ファイルに対応するdatabase_idで統計情報を設定
+                    # 注意: 現在は全ファイルで同じ統計情報を使用
+                    db_stats = SimpleNamespace(
+                        table_stats=loaded_stats.get('table_stats', {}),
+                        column_stats=loaded_stats.get('column_stats', {})
+                    )
+                    db_statistics[file_idx] = db_stats
+                
+                # 統計情報の有無を確認
+                has_stats = (
+                    loaded_stats.get('table_stats') or 
+                    loaded_stats.get('column_stats')
+                )
+                
+                if has_stats:
+                    print(f"✅ データベース統計情報が利用可能です")
+                    print(f"   - テーブル統計: {len(loaded_stats.get('table_stats', {}))} テーブル")
+                    print(f"   - カラム統計: {len(loaded_stats.get('column_stats', {}))} カラム")
+                print()
+            except Exception as e:
+                print(f"⚠️  統計情報の読み込みでエラーが発生しました: {e}")
+                print(f"   統計情報なしでトレーニングを続行します")
+                print()
         else:
             print(f"ℹ️  統計情報ディレクトリが見つかりません: {stats_dir_path}")
             print(f"   統計情報なしでトレーニングを続行します")

@@ -819,7 +819,10 @@ def parse_trino_plans_v2(run_stats, min_runtime=100, max_runtime=30000, parse_ba
             analyze_plan.join_conds = join_conds
         
         # プラン統計情報を収集
-        tables, filter_columns, operators = plan_statistics(analyze_plan)
+        stats_result = plan_statistics(analyze_plan)
+        tables = stats_result['tables']
+        filter_columns = stats_result['filter_columns']
+        operators = stats_result['operators']
         
         # カラム情報を統計情報と照合
         try:
@@ -855,8 +858,11 @@ def parse_trino_plans_v2(run_stats, min_runtime=100, max_runtime=30000, parse_ba
         # フィルター数（AND, ORを除く）
         no_filters.append(len([fc for fc in filter_columns if fc[0] is not None]))
         
-        # SQL文字列をプランに追加
-        analyze_plan.sql = q.sql
+        # SQL文字列をプランに追加（存在する場合のみ）
+        if hasattr(q, 'sql'):
+            analyze_plan.sql = q.sql
+        else:
+            analyze_plan.sql = 'SELECT * FROM unknown'  # デフォルト
         
         parsed_plans.append(analyze_plan)
         

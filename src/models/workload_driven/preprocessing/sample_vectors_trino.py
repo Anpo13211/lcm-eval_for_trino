@@ -409,7 +409,7 @@ def get_table_samples_from_trino(dataset: str,
     Returns:
         Dict[str, pd.DataFrame]: テーブル名をキーとするDataFrameの辞書
     """
-    schema = load_schema_json(dataset)
+    schema = load_schema_json(dataset, prefer_zero_shot=True)
     table_samples = {}
     
     for table_name in schema.tables:
@@ -456,11 +456,11 @@ def get_table_samples_from_csv(dataset: str,
     Returns:
         Dict[str, pd.DataFrame]: テーブル名をキーとするDataFrameの辞書
     """
-    # Try primary schema loader; fallback to lakehouse path
+    # Trino用のschema.json読み込みを使用（zero-shot_datasets配下を優先）
     try:
-        schema = load_schema_json(dataset)
-    except AssertionError:
-        # Fallback: load schema from lakehouse zero-shot datasets
+        schema = load_schema_json(dataset, prefer_zero_shot=True)
+    except (FileNotFoundError, AssertionError):
+        # Fallback: 旧形式のパス
         fallback_path = os.path.join('/Users/an/query_engine/lakehouse/zero-shot_datasets', dataset, 'schema.json')
         if not os.path.exists(fallback_path):
             raise

@@ -47,6 +47,19 @@ def child_prod(p, feature_name, default=1):
 
 def list_columns(n, columns):
     """カラム情報をリストに追加"""
-    columns.add((n.column, n.operator))
-    for c in n.children:
-        list_columns(c, columns)
+    from cross_db_benchmark.benchmark_tools.trino.parse_filter import PredicateNode
+    
+    if isinstance(n, PredicateNode):
+        columns.add((n.column, n.operator))
+        for c in n.children:
+            list_columns(c, columns)
+    elif isinstance(n, dict):
+        # filter_columnsがdict形式の場合
+        if 'column' in n and 'operator' in n:
+            columns.add((n['column'], n['operator']))
+        if 'children' in n:
+            for c in n['children']:
+                list_columns(c, columns)
+    else:
+        # その他の型の場合はスキップ
+        pass

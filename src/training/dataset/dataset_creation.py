@@ -164,9 +164,21 @@ def read_explain_analyze_txt(
                 except Exception as e:
                     print(f"Warning: Failed to load statistics: {e}")
     
+    # Postgres形式（zero-shotモデル標準形式）でデータベース統計を作成
+    # column_stats: {(table, column): SimpleNamespace} 形式
+    # table_stats: {table: SimpleNamespace} 形式（リストから辞書に変換）
+    column_stats_dict = {}
+    for i, col_stat in enumerate(column_stats_list):
+        key = (col_stat.tablename, col_stat.attname)
+        column_stats_dict[key] = col_stat
+    
+    table_stats_dict = {}
+    for table_stat in table_stats_list:
+        table_stats_dict[table_stat.relname] = table_stat
+    
     database_stats = SimpleNamespace(
-        table_stats=table_stats_list,
-        column_stats=column_stats_list,
+        table_stats=table_stats_dict,  # 辞書形式に変更（Postgres形式）
+        column_stats=column_stats_dict,  # 辞書形式に変更（Postgres形式）
         database_type='trino'
     )
     

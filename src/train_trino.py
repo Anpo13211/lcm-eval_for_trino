@@ -70,58 +70,72 @@ def parse_and_prepare_data(
     
     parser = TrinoPlanParser()
     
+    # 統計情報を先に読み込む（カラムIDマッピングを作成するため）
+    print(f"統計情報を読み込み中（{dataset}）...")
+    
+    # zero-shot_datasets配下のcolumn_statistics.jsonを読み込む（Postgresと同じ形式）
+    zero_shot_col_stats_path = Path('/Users/an/query_engine/lakehouse/zero-shot_datasets') / dataset / 'column_statistics.json'
+    if not zero_shot_col_stats_path.exists():
+        raise FileNotFoundError(f"column_statistics.jsonが見つかりません: {zero_shot_col_stats_path}")
+    
+    with open(zero_shot_col_stats_path) as f:
+        zero_shot_column_stats = json.load(f)
+    
     # テーブルサンプルとカラム統計を準備
     print(f"テーブルサンプルを取得中（{dataset}）...")
     table_samples = get_table_samples_from_csv(dataset, data_dir=None, no_samples=no_samples)
     
     schema = load_schema_json(dataset)
+    # col_statsはsample_vec生成用（SimpleNamespace形式）
+    # zero-shotのcolumn_statisticsから作成
     col_stats = []
-    for table_name in schema.tables:
-        if table_name in table_samples:
-            df = table_samples[table_name]
-            for col_name in df.columns:
-                col_stats.append(SimpleNamespace(
-                    tablename=table_name,
-                    attname=col_name,
-                    attnum=len(col_stats)
-                ))
+    for table_name, table_cols in zero_shot_column_stats.items():
+        for col_name in table_cols.keys():
+            col_stats.append(SimpleNamespace(
+                tablename=table_name,
+                attname=col_name,
+                attnum=len(col_stats)
+            ))
     
     print(f"✅ テーブルサンプル: {len(table_samples)} テーブル")
     print(f"✅ カラム統計: {len(col_stats)} カラム")
     print()
     
-    # 統計情報を先に読み込む（カラムIDマッピングを作成するため）
-    print(f"統計情報を読み込み中（{dataset}）...")
+    # table_stats.jsonはdatasets_statisticsから読み込む
     stats_dir = Path('..') / 'datasets_statistics' / f'iceberg_{dataset}'
-    
     if not stats_dir.exists():
         raise FileNotFoundError(f"統計情報が見つかりません: {stats_dir}")
-    
-    with open(stats_dir / 'column_stats.json') as f:
-        column_stats_dict = json.load(f)
     
     with open(stats_dir / 'table_stats.json') as f:
         table_stats_dict = json.load(f)
     
-    # カラムIDマッピングを作成
+    # zero-shot形式のcolumn_statisticsをPostgres形式に変換し、カラムIDマッピングを作成
     column_id_mapping = {}
     partial_column_name_mapping = {}
     table_id_mapping = {}
     
     column_stats_list = []
-    for col_key, stats in column_stats_dict.items():
-        idx = len(column_stats_list)
-        table_name = stats.get('table')
-        col_name = stats.get('column')
-        
-        if table_name and col_name:
+    # zero-shot形式: {table_name: {column_name: {stats...}}}
+    # これを順序付きリストに変換し、IDマッピングを作成
+    for table_name, table_cols in zero_shot_column_stats.items():
+        for col_name, col_stats in table_cols.items():
+            idx = len(column_stats_list)
             column_id_mapping[(table_name, col_name)] = idx
             
             if col_name not in partial_column_name_mapping:
                 partial_column_name_mapping[col_name] = set()
             partial_column_name_mapping[col_name].add(table_name)
-        
-        column_stats_list.append(stats)
+            
+            # SimpleNamespace形式のcolumn_statsを作成
+            column_stats_list.append(SimpleNamespace(
+                tablename=table_name,
+                attname=col_name,
+                attnum=idx,
+                null_frac=col_stats.get('nan_ratio', 0.0),
+                avg_width=0,  # zero-shot形式にはない
+                n_distinct=col_stats.get('num_unique', -1),
+                correlation=0  # zero-shot形式にはない
+            ))
     
     for i, (table_name, stats) in enumerate(table_stats_dict.items()):
         table_id_mapping[table_name] = i
@@ -276,23 +290,21 @@ def parse_and_prepare_data(
     print(f"✅ feature_statisticsを保存: {feature_stats_file}")
     print()
     
+    # zero-shot形式のcolumn_statisticsをPostgres形式に変換
     column_statistics = {}
-    for col_key, stats in column_stats_dict.items():
-        table_name = stats.get('table')
-        col_name = stats.get('column')
-        
-        if table_name and col_name:
-            if table_name not in column_statistics:
-                column_statistics[table_name] = {}
-            
-            column_statistics[table_name][col_name] = {
-                'datatype': stats.get('datatype', 'misc'),
-                'min': stats.get('min'),
-                'max': stats.get('max'),
-                'percentiles': stats.get('percentiles'),
-                'num_unique': stats.get('distinct_values_count', -1),
-                'null_frac': stats.get('null_frac', 0)
+    for table_name, table_cols in zero_shot_column_stats.items():
+        column_statistics[table_name] = {}
+        for col_name, col_stats in table_cols.items():
+            # zero-shot形式からPostgres形式に変換
+            converted_stats = {
+                'datatype': col_stats.get('datatype', 'misc'),
+                'min': col_stats.get('min'),
+                'max': col_stats.get('max'),
+                'percentiles': col_stats.get('percentiles'),
+                'num_unique': col_stats.get('num_unique', -1),
+                'null_frac': col_stats.get('nan_ratio', 0.0)
             }
+            column_statistics[table_name][col_name] = converted_stats
     
     print(f"✅ column_statistics: {len(column_statistics)} テーブル")
     
@@ -313,17 +325,8 @@ def parse_and_prepare_data(
             relpages=stats.get('relpages', 0)
         ))
     
-    column_stats_list = []
-    for col_key, stats in column_stats_dict.items():
-        column_stats_list.append(SimpleNamespace(
-            tablename=stats.get('table'),
-            attname=stats.get('column'),
-            attnum=len(column_stats_list),
-            null_frac=stats.get('null_frac', 0),
-            avg_width=stats.get('avg_width', 0),
-            n_distinct=stats.get('n_distinct', -1),
-            correlation=stats.get('correlation', 0)
-        ))
+    # column_stats_listは既に作成済み（上記の変換処理で）
+    # ここでは確認のみ
     
     database_statistics = SimpleNamespace(
         table_stats=table_stats_list,
@@ -385,16 +388,23 @@ def parse_and_prepare_leave_one_out(
     
     # Helper to load stats and build global column ids for a dataset
     def load_stats_and_prepare_ids(dataset: str):
-        stats_dir = Path('src').parent / 'datasets_statistics' / f'iceberg_{dataset}'
-        if not stats_dir.exists():
+        # zero-shot_datasets配下のcolumn_statistics.jsonを読み込む
+        zero_shot_col_stats_path = Path('/Users/an/query_engine/lakehouse/zero-shot_datasets') / dataset / 'column_statistics.json'
+        if not zero_shot_col_stats_path.exists():
             # No stats available; return empty dicts and mappings
-            column_stats_dict = {}
+            zero_shot_column_stats = {}
             table_stats_dict = {}
         else:
-            with open(stats_dir / 'column_stats.json') as f:
-                column_stats_dict = json.load(f)
-            with open(stats_dir / 'table_stats.json') as f:
-                table_stats_dict = json.load(f)
+            with open(zero_shot_col_stats_path) as f:
+                zero_shot_column_stats = json.load(f)
+            
+            # table_stats.jsonはdatasets_statisticsから読み込む
+            stats_dir = Path('src').parent / 'datasets_statistics' / f'iceberg_{dataset}'
+            if stats_dir.exists():
+                with open(stats_dir / 'table_stats.json') as f:
+                    table_stats_dict = json.load(f)
+            else:
+                table_stats_dict = {}
         
         # Build table stats entries (with dataset prefix)
         for table_name, tstats in table_stats_dict.items():
@@ -405,62 +415,68 @@ def parse_and_prepare_leave_one_out(
             ))
         
         # Per-dataset column_id_mapping to global ids
+        # zero-shot形式: {table_name: {column_name: {stats...}}}
         column_id_mapping_ds = {}
         partial_column_name_mapping_ds = {}
-        for _, cstats in column_stats_dict.items():
-            table_name = cstats.get('table')
-            col_name = cstats.get('column')
-            if table_name is None or col_name is None:
-                continue
-            key = (dataset, table_name, col_name)
-            if key not in global_column_id:
-                gid = len(global_column_stats_list)
-                global_column_id[key] = gid
-                global_column_stats_list.append(SimpleNamespace(
-                    tablename=f"{dataset}.{table_name}",
-                    attname=col_name,
-                    attnum=gid,
-                    null_frac=cstats.get('null_frac', 0),
-                    avg_width=cstats.get('avg_width', 0),
-                    n_distinct=cstats.get('n_distinct', -1),
-                    correlation=cstats.get('correlation', 0)
-                ))
-            # For parsing within this dataset
-            column_id_mapping_ds[(table_name, col_name)] = global_column_id[key]
-            partial_column_name_mapping_ds.setdefault(col_name, set()).add(table_name)
+        for table_name, table_cols in zero_shot_column_stats.items():
+            for col_name, col_stats in table_cols.items():
+                key = (dataset, table_name, col_name)
+                if key not in global_column_id:
+                    gid = len(global_column_stats_list)
+                    global_column_id[key] = gid
+                    global_column_stats_list.append(SimpleNamespace(
+                        tablename=f"{dataset}.{table_name}",
+                        attname=col_name,
+                        attnum=gid,
+                        null_frac=col_stats.get('nan_ratio', 0.0),
+                        avg_width=0,  # zero-shot形式にはない
+                        n_distinct=col_stats.get('num_unique', -1),
+                        correlation=0  # zero-shot形式にはない
+                    ))
+                # For parsing within this dataset
+                column_id_mapping_ds[(table_name, col_name)] = global_column_id[key]
+                partial_column_name_mapping_ds.setdefault(col_name, set()).add(table_name)
         
-        # Build combined column_statistics with prefixed table
-        for _, cstats in column_stats_dict.items():
-            tname = cstats.get('table')
-            cname = cstats.get('column')
-            if tname and cname:
-                pref_t = f"{dataset}.{tname}"
-                combined_column_statistics.setdefault(pref_t, {})[cname] = {
-                    'datatype': cstats.get('datatype', 'misc'),
-                    'min': cstats.get('min'),
-                    'max': cstats.get('max'),
-                    'percentiles': cstats.get('percentiles'),
-                    'num_unique': cstats.get('distinct_values_count', -1),
-                    'null_frac': cstats.get('null_frac', 0)
+        # Build combined column_statistics with prefixed table (zero-shot形式から変換)
+        for table_name, table_cols in zero_shot_column_stats.items():
+            pref_t = f"{dataset}.{table_name}"
+            for col_name, col_stats in table_cols.items():
+                combined_column_statistics.setdefault(pref_t, {})[col_name] = {
+                    'datatype': col_stats.get('datatype', 'misc'),
+                    'min': col_stats.get('min'),
+                    'max': col_stats.get('max'),
+                    'percentiles': col_stats.get('percentiles'),
+                    'num_unique': col_stats.get('num_unique', -1),
+                    'null_frac': col_stats.get('nan_ratio', 0.0)
                 }
         
-        return column_stats_dict, table_stats_dict, column_id_mapping_ds, partial_column_name_mapping_ds
+        # 戻り値は互換性のためダミーデータを返す（実際には使用されない）
+        return {}, table_stats_dict, column_id_mapping_ds, partial_column_name_mapping_ds
     
     # Parse plans for a dataset list
     def parse_plans_for_dataset(dataset: str, files: list):
         column_stats_dict, table_stats_dict, column_id_mapping_ds, partial_col_map_ds = load_stats_and_prepare_ids(dataset)
+        
+        # zero-shot形式のcolumn_statisticsを読み込んでcol_stats_nsを作成
+        zero_shot_col_stats_path = Path('/Users/an/query_engine/lakehouse/zero-shot_datasets') / dataset / 'column_statistics.json'
+        zero_shot_column_stats = {}
+        if zero_shot_col_stats_path.exists():
+            with open(zero_shot_col_stats_path) as f:
+                zero_shot_column_stats = json.load(f)
         
         # Prepare table samples and simple col_stats namespaces for sample_vec generation (optional)
         table_samples = None
         col_stats_ns = []
         try:
             table_samples = get_table_samples_from_csv(dataset, data_dir=None, no_samples=no_samples)
-            schema = load_schema_json(dataset)
-            for table_name in schema.tables:
-                if table_name in table_samples:
-                    df = table_samples[table_name]
-                    for col_name in df.columns:
-                        col_stats_ns.append(SimpleNamespace(tablename=table_name, attname=col_name, attnum=len(col_stats_ns)))
+            # zero-shotのcolumn_statisticsからcol_stats_nsを作成
+            for table_name, table_cols in zero_shot_column_stats.items():
+                for col_name in table_cols.keys():
+                    col_stats_ns.append(SimpleNamespace(
+                        tablename=table_name,
+                        attname=col_name,
+                        attnum=len(col_stats_ns)
+                    ))
         except Exception:
             # Fallback: no samples/col_stats; sample_vec will be zeros during encoding
             table_samples = None

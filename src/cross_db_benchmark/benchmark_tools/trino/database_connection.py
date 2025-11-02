@@ -38,7 +38,13 @@ class TrinoDatabaseConnection(DatabaseConnection):
         print(f"Data directory: {data_dir}")
         
         # Trinoでは直接的なデータベース作成は不要
-        # スキーマファイルの確認のみ
+        # スキーマファイルの確認のみ（zero-shot_datasets配下を優先）
+        try:
+            schema = load_schema_json(dataset, prefer_zero_shot=True)
+            print(f"Schema found: {len(schema.tables)} tables")
+        except FileNotFoundError:
+            print("No schema file found")
+        
         schema_sql = load_schema_sql(dataset, 'trino.sql')
         if schema_sql:
             print("Schema SQL found, but Trino loading is handled externally")

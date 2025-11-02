@@ -19,62 +19,47 @@ from training.preprocessing.feature_statistics import FeatureType
 def load_database_statistics(
     catalog: str, 
     schema: str, 
-    stats_dir: str = 'datasets_statistics'
+    stats_dir: str = 'datasets_statistics',
+    prefer_zero_shot: bool = True
 ) -> Dict[str, Dict]:
     """
-    データベース統計情報を読み込む
+    データベース統計情報を読み込む（zero-shot形式対応）
     
     Args:
-        catalog: Trinoカタログ名
-        schema: スキーマ名
+        catalog: Trinoカタログ名（通常は'iceberg'）
+        schema: スキーマ名（データセット名）
         stats_dir: 統計情報のルートディレクトリ
-        
+        prefer_zero_shot: Trueの場合、zero-shot形式を優先して読み込む
+    
     Returns:
-        {
-            'table_stats': {...},
-            'column_stats': {...},
-            'metadata': {...}
+        Postgres形式（zero-shotモデル標準形式）の統計情報: {
+            'table_stats': {table: SimpleNamespace},
+            'column_stats': {(table, column): SimpleNamespace}
         }
     """
+    from models.zeroshot.utils.statistics_loader import load_database_statistics_for_zeroshot
+    
+    # zero-shot形式から読み込んでPostgres形式に変換
+    dataset = schema  # schema名がデータセット名と一致する場合
+    postgres_format = load_database_statistics_for_zeroshot(
+        dataset=dataset,
+        prefer_zero_shot=prefer_zero_shot,
+        stats_dir=stats_dir
+    )
+    
+    # メタデータも読み込む（既存の互換性のため）
     schema_dir = Path(stats_dir) / f"{catalog}_{schema}"
-    
-    if not schema_dir.exists():
-        print(f"⚠️  統計情報ディレクトリが見つかりません: {schema_dir}")
-        return {
-            'table_stats': {},
-            'column_stats': {},
-            'metadata': {}
-        }
-    
-    stats = {}
-    
-    # テーブル統計を読み込み
-    table_stats_file = schema_dir / 'table_stats.json'
-    if table_stats_file.exists():
-        with open(table_stats_file, 'r', encoding='utf-8') as f:
-            stats['table_stats'] = json.load(f)
-        print(f"✅ テーブル統計を読み込みました: {len(stats['table_stats'])} テーブル")
-    else:
-        stats['table_stats'] = {}
-    
-    # カラム統計を読み込み
-    column_stats_file = schema_dir / 'column_stats.json'
-    if column_stats_file.exists():
-        with open(column_stats_file, 'r', encoding='utf-8') as f:
-            stats['column_stats'] = json.load(f)
-        print(f"✅ カラム統計を読み込みました: {len(stats['column_stats'])} カラム")
-    else:
-        stats['column_stats'] = {}
-    
-    # メタデータを読み込み
     metadata_file = schema_dir / 'metadata.json'
+    metadata = {}
     if metadata_file.exists():
         with open(metadata_file, 'r', encoding='utf-8') as f:
-            stats['metadata'] = json.load(f)
-    else:
-        stats['metadata'] = {}
+            metadata = json.load(f)
     
-    return stats
+    return {
+        'table_stats': postgres_format['table_stats'],
+        'column_stats': postgres_format['column_stats'],
+        'metadata': metadata
+    }
 
 
 def encode(column, plan_params, feature_statistics):
@@ -113,11 +98,14 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
     """
     Trinoプランをグラフに変換する
     
+    この関数はPostgres版の`plan_to_graph()`と互換性を持つように設計されています。
+    `db_statistics`はPostgres形式（{(table, column): SimpleNamespace}）を期待します。
+    
     引数一覧：
     1. 入力データ
         node: 現在処理中のTrino実行計画ノード
         database_id: データベースの識別子
-        db_statistics: データベースの統計情報
+        db_statistics: データベースの統計情報（Postgres形式）
         feature_statistics: 特徴量の統計情報
         plan_featurization: 特徴量化の設定
     2. 出力用のリスト（参照渡しで更新）
@@ -147,7 +135,8 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
     current_plan_id = len(plan_depths)
     plan_depths.append(depth)
     
-    # データベース統計を取得
+    # データベース統計を取得（Postgres形式を期待）
+    # db_statistics[database_id].column_stats は {(table, column): SimpleNamespace} 形式
     db_stats = None
     if db_statistics is not None:
         if isinstance(db_statistics, dict):
@@ -155,7 +144,10 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
         else:
             db_stats = getattr(db_statistics, database_id, None)
 
+    # Postgres形式: db_stats.column_stats は {(table, column): SimpleNamespace} 形式
     db_column_stats = getattr(db_stats, 'column_stats', None) if db_stats is not None else None
+    
+    # db_real_statisticsは旧形式の互換性のためのフォールバック（将来削除予定）
 
     # プランの特徴量を抽出
     plan_feat = []
@@ -191,15 +183,26 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
         if table_name not in table_idx:
             table_idx[table_name] = len(table_features)
             
-            # データベース統計情報からテーブル統計を取得
+            # データベース統計情報からテーブル統計を取得（Postgres形式）
             table_stats_dict = {}
-            if db_real_statistics and 'table_stats' in db_real_statistics:
+            # Postgres形式: db_stats.table_stats は {table: SimpleNamespace} 形式
+            if db_stats is not None:
+                db_table_stats = getattr(db_stats, 'table_stats', None)
+                if db_table_stats is not None and table_name in db_table_stats:
+                    # Postgres形式から取得（SimpleNamespace）
+                    table_stat = db_table_stats[table_name]
+                    table_stats_dict = {
+                        'reltuples': table_stat.reltuples if hasattr(table_stat, 'reltuples') else 0,
+                        'relpages': table_stat.relpages if hasattr(table_stat, 'relpages') else 0,
+                    }
+            
+            # フォールバック: 旧形式（db_real_statistics）の互換性
+            if not table_stats_dict and db_real_statistics and 'table_stats' in db_real_statistics:
                 if table_name in db_real_statistics['table_stats']:
                     table_stats = db_real_statistics['table_stats'][table_name]
-                    # Trinoのテーブル統計をPostgres形式にマッピング
                     table_stats_dict = {
-                        'reltuples': table_stats.get('row_count', 0),  # 行数
-                        'relpages': 0,  # Trinoではページ数は取得不可、ダミー値
+                        'reltuples': table_stats.get('row_count', 0),
+                        'relpages': 0,
                     }
             
             # テーブルの特徴量を抽出
@@ -347,20 +350,22 @@ def lookup_stats(stats_container, key, db_statistics=None):
     統計情報を取得するユーティリティ
     
     Args:
-        stats_container: 主要な統計情報ソース（従来のdb_column_stats等）
-        key: 検索キー（通常はカラム名のタプル）
-        db_statistics: データベース統計情報（load_database_statistics()の戻り値）
+        stats_container: Postgres形式の統計情報ソース（{(table, column): SimpleNamespace}）
+        key: 検索キー（通常はカラム名のタプル (table, column)）
+        db_statistics: データベース統計情報（旧形式の互換性のためのフォールバック）
     
     Returns:
-        統計情報オブジェクトまたはNone
+        統計情報オブジェクト（SimpleNamespace）またはNone
     """
-    # 従来の統計情報から検索
+    # Postgres形式の統計情報から検索（優先）
     if stats_container is not None and key is not None:
+        # stats_containerは {(table, column): SimpleNamespace} 形式
         if isinstance(stats_container, dict):
             result = stats_container.get(key)
             if result is not None:
                 return result
         
+        # SimpleNamespaceの場合はgetメソッドが使えないので、dictとして扱う
         if hasattr(stats_container, 'get'):
             try:
                 result = stats_container.get(key)
@@ -369,11 +374,11 @@ def lookup_stats(stats_container, key, db_statistics=None):
             except Exception:
                 pass
     
-    # データベース統計情報から検索（フォールバック）
+    # フォールバック: 旧形式（db_statistics）の互換性
+    # この部分は将来削除される可能性があります
     if db_statistics and 'column_stats' in db_statistics:
         # keyがタプルの場合、table.column形式に変換
         if isinstance(key, tuple) and len(key) >= 1:
-            # (table, column) または (column,) の形式を想定
             if len(key) == 2:
                 lookup_key = f"{key[0]}.{key[1]}"
             elif len(key) == 1:
@@ -381,14 +386,12 @@ def lookup_stats(stats_container, key, db_statistics=None):
                 column_name = key[0]
                 for full_col_name, col_stats in db_statistics['column_stats'].items():
                     if col_stats.get('column') == column_name:
-                        # 統計情報を簡易オブジェクトに変換
                         return type('ColumnStats', (), col_stats)
                 return None
             else:
                 lookup_key = '.'.join(str(k) for k in key)
             
             if lookup_key in db_statistics['column_stats']:
-                # 統計情報を簡易オブジェクトに変換
                 col_stats = db_statistics['column_stats'][lookup_key]
                 return type('ColumnStats', (), col_stats)
     
@@ -463,7 +466,9 @@ def trino_plan_collator(plans, feature_statistics: dict = None, db_statistics: d
     Args:
         plans: Trinoプランのリスト
         feature_statistics: 特徴量の統計情報
-        db_statistics: データベースの統計情報
+        db_statistics: データベースの統計情報（Postgres形式）
+            - db_statistics[database_id].column_stats: {(table, column): SimpleNamespace}
+            - db_statistics[database_id].table_stats: {table: SimpleNamespace}
         plan_featurization: プランの特徴量化設定
     
     Returns:
@@ -471,6 +476,10 @@ def trino_plan_collator(plans, feature_statistics: dict = None, db_statistics: d
         features: ノード特徴量の辞書
         labels: ラベル（実行時間）のリスト
         sample_idxs: サンプルインデックスのリスト
+    
+    Note:
+        Postgres版の`postgres_plan_collator()`と互換性を持つように設計されています。
+        統計情報はPostgres形式（{(table, column): SimpleNamespace}）を期待します。
     """
     
     # 出力用のリスト
@@ -503,11 +512,17 @@ def trino_plan_collator(plans, feature_statistics: dict = None, db_statistics: d
     for sample_idx, p in plans:
         sample_idxs.append(sample_idx)
         labels.append(p.plan_runtime)  # 各クエリの実行時間
-        plan_to_graph(p, p.database_id, plan_depths, plan_features, plan_to_plan_edges, db_statistics,
+        
+        # db_statisticsが辞書形式で、database_idをキーとして持つ場合の処理
+        # db_statistics[database_id]がSimpleNamespaceの場合、そのまま使用
+        # db_statisticsがNoneや空の場合は空のdictとして扱う
+        db_stats_for_plan = db_statistics if db_statistics else {}
+        
+        plan_to_graph(p, p.database_id, plan_depths, plan_features, plan_to_plan_edges, db_stats_for_plan,
                       feature_statistics, filter_to_plan_edges, filter_features, output_column_to_plan_edges,
                       output_column_features, column_to_output_column_edges, column_features, table_features,
                       table_to_plan_edges, output_column_idx, column_idx, table_idx,
-                      plan_featurization, predicate_depths, intra_predicate_edges, logical_preds, db_real_statistics=db_statistics)
+                      plan_featurization, predicate_depths, intra_predicate_edges, logical_preds, db_real_statistics=None)
     
     assert len(labels) == len(plans)
     assert len(plan_depths) == len(plan_features)
