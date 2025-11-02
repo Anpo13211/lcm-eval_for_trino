@@ -21,7 +21,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -1034,7 +1034,8 @@ def train_queryformer_trino(
     return model, metrics
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for QueryFormer training."""
     parser = argparse.ArgumentParser(description='Trino QueryFormer Training')
     parser.add_argument('--mode', choices=['train', 'train_multi', 'predict'], default='train')
     parser.add_argument('--model_type', default='query_former')
@@ -1053,8 +1054,11 @@ def main():
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--plans_dir', type=str, default='/Users/an/query_engine/explain_analyze_results/', help='Dir of .txt plans for multiple datasets')
     parser.add_argument('--test_dataset', type=str, default=None, help='Dataset name to hold out (prefix in filename)')
-    
-    args = parser.parse_args()
+    return parser
+
+
+def run(args) -> int:
+    """Run QueryFormer training with parsed arguments."""
     
     # シード設定
     torch.manual_seed(args.seed)
@@ -1323,6 +1327,13 @@ def main():
         return 1
     
     return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Main entry point for QueryFormer training."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return run(args)
 
 
 if __name__ == '__main__':

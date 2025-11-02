@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import argparse
 import json
+from typing import Optional, Sequence
 import numpy as np
 import torch
 
@@ -272,8 +273,19 @@ def main():
     print(f"Test Median Q-Error: {test_metrics['median_q_error']:.4f}")
     print(f"Model saved to: {model_path}")
     print("=" * 80)
+    
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Main entry point for Flat-Vector training."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return run(args)
 
 
 if __name__ == "__main__":
-    main()
+    from typing import Optional, Sequence
+    import sys
+    sys.exit(main())
 

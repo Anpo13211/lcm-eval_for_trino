@@ -37,6 +37,7 @@ import json
 import re
 import functools
 from pathlib import Path
+from typing import Optional, Sequence
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, random_split
@@ -468,7 +469,8 @@ def validate(model, val_loader, device):
     return avg_loss, None, None, None
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for Zero-Shot training."""
     parser = argparse.ArgumentParser(description='Train Trino Zero-Shot Model (統合版)')
     
     # データ関連の引数
@@ -507,7 +509,11 @@ def main():
     parser.add_argument('--num_workers', type=int, default=0,
                         help='DataLoaderのワーカー数')
     
-    args = parser.parse_args()
+    return parser
+
+
+def run(args) -> int:
+    """Run Zero-Shot training with parsed arguments."""
     
     # 出力ディレクトリ作成
     output_dir = Path(args.output_dir)
@@ -783,8 +789,19 @@ def main():
     print(f"Test Median Q-Error: {test_median_q_error:.4f}")
     print(f"Model saved to: {output_dir / 'best_model.pt'}")
     print("=" * 80)
+    
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Main entry point for Zero-Shot training."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return run(args)
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    from typing import Optional, Sequence
+    sys.exit(main())
 
