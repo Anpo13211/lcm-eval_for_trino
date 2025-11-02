@@ -3,7 +3,7 @@
 Trino QueryFormer Training Script
 
 Usage:
-    python src/train_trino.py \\
+    python src/train_entry.py query-former \\
         --mode train \\
         --model_type query_former \\
         --dataset accidents \\
@@ -74,7 +74,9 @@ def parse_and_prepare_data(
     print(f"統計情報を読み込み中（{dataset}）...")
     
     # zero-shot_datasets配下のcolumn_statistics.jsonを読み込む（Postgresと同じ形式）
-    zero_shot_col_stats_path = Path('/Users/an/query_engine/lakehouse/zero-shot_datasets') / dataset / 'column_statistics.json'
+    # Docker環境とローカル環境の両方に対応
+    zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
+    zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
     if not zero_shot_col_stats_path.exists():
         raise FileNotFoundError(f"column_statistics.jsonが見つかりません: {zero_shot_col_stats_path}")
     
@@ -102,7 +104,9 @@ def parse_and_prepare_data(
     print()
     
     # table_stats.jsonはdatasets_statisticsから読み込む
-    stats_dir = Path('..') / 'datasets_statistics' / f'iceberg_{dataset}'
+    # Docker環境とローカル環境の両方に対応
+    stats_base = os.getenv('DATASETS_STATISTICS_DIR', Path(__file__).parent.parent.parent.parent / 'datasets_statistics')
+    stats_dir = Path(stats_base) / f'iceberg_{dataset}'
     if not stats_dir.exists():
         raise FileNotFoundError(f"統計情報が見つかりません: {stats_dir}")
     
@@ -389,7 +393,8 @@ def parse_and_prepare_leave_one_out(
     # Helper to load stats and build global column ids for a dataset
     def load_stats_and_prepare_ids(dataset: str):
         # zero-shot_datasets配下のcolumn_statistics.jsonを読み込む
-        zero_shot_col_stats_path = Path('/Users/an/query_engine/lakehouse/zero-shot_datasets') / dataset / 'column_statistics.json'
+        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
+        zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
         if not zero_shot_col_stats_path.exists():
             # No stats available; return empty dicts and mappings
             zero_shot_column_stats = {}
@@ -458,7 +463,8 @@ def parse_and_prepare_leave_one_out(
         column_stats_dict, table_stats_dict, column_id_mapping_ds, partial_col_map_ds = load_stats_and_prepare_ids(dataset)
         
         # zero-shot形式のcolumn_statisticsを読み込んでcol_stats_nsを作成
-        zero_shot_col_stats_path = Path('/Users/an/query_engine/lakehouse/zero-shot_datasets') / dataset / 'column_statistics.json'
+        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
+        zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
         zero_shot_column_stats = {}
         if zero_shot_col_stats_path.exists():
             with open(zero_shot_col_stats_path) as f:

@@ -186,14 +186,15 @@ def recursively_convert_plan(plan: SimpleNamespace,
                              dim_bitmaps: int = 1000,
                              max_filter_number: int = 5,
                              histogram_bin_size: int = 10) -> TreeNode:
+    # vars() で SimpleNamespace を辞書に変換
     plan_parameters = vars(plan.plan_parameters)
 
     # 1. Get operator type and type id
-    operator_name = plan_parameters['op_name']
+    operator_name = plan_parameters.get('op_name', 'Unknown')
     operator_type_id = feature_statistics['op_name']['value_dict'][operator_name]
 
     # 2. Get table name (encode to numeric ID)
-    table_name_raw = plan_parameters.get('tablename')
+    table_name_raw = plan_parameters.get('tablename', None)
     if isinstance(table_name_raw, int):
         table_name = table_name_raw
     elif isinstance(table_name_raw, str):
@@ -215,12 +216,12 @@ def recursively_convert_plan(plan: SimpleNamespace,
                                ).reshape(1, 3)
 
     histogram_info = np.empty([], dtype=float)
-    filter_columns = plan_parameters.get('filter_columns')
+    filter_columns = plan_parameters.get('filter_columns', None)
     if filter_columns is not None:
         filter_info = parse_filter_information(filter_columns=filter_columns)
         assert len(filter_info) <= max_filter_number, f"Filter number exceeds max filter number, {filter_info}"
         # Get sample vector
-        sample_bitmap_vec = get_sample_vector(sample_bitmap_vec=plan_parameters.get('sample_vec'),
+        sample_bitmap_vec = get_sample_vector(sample_bitmap_vec=plan_parameters.get('sample_vec', None),
                                               dim_bitmaps=dim_bitmaps)
 
         encoded_filter_info = get_encoded_filter(filter_info=filter_info,

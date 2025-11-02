@@ -1,5 +1,6 @@
 import math
 import re
+from types import SimpleNamespace
 
 from cross_db_benchmark.benchmark_tools.abstract.plan_operator import AbstractPlanOperator
 from cross_db_benchmark.benchmark_tools.generate_workload import Aggregator, ExtendedAggregator, LogicalOperator
@@ -29,6 +30,72 @@ class TrinoPlanOperator(AbstractPlanOperator):
     def __init__(self, plain_content=None, children=None, plan_parameters=None, plan_runtime=0):
         super().__init__(plain_content, children, plan_parameters, plan_runtime)
         self.database_type = "trino"
+        # plan_parametersがNoneまたはdictの場合、SimpleNamespaceに変換
+        if self.plan_parameters is None or isinstance(self.plan_parameters, dict):
+            if self.plan_parameters is None:
+                self.plan_parameters = SimpleNamespace()
+            else:
+                # dictからSimpleNamespaceに変換
+                params_dict = self.plan_parameters
+                self.plan_parameters = SimpleNamespace(**params_dict)
+    
+    def _get_param(self, key, default=None):
+        """plan_parametersから値を取得（SimpleNamespace対応）"""
+        if isinstance(self.plan_parameters, SimpleNamespace):
+            return getattr(self.plan_parameters, key, default)
+        else:
+            return self.plan_parameters.get(key, default)
+    
+    def _has_param(self, key):
+        """plan_parametersにキーが存在するかチェック（SimpleNamespace対応）"""
+        if isinstance(self.plan_parameters, SimpleNamespace):
+            return hasattr(self.plan_parameters, key)
+        else:
+            return key in self.plan_parameters
+    
+    def _set_param(self, key, value):
+        """plan_parametersに値を設定（SimpleNamespace対応）"""
+        if isinstance(self.plan_parameters, SimpleNamespace):
+            setattr(self.plan_parameters, key, value)
+        else:
+            self.plan_parameters[key] = value
+    
+    def _update_params(self, params_dict):
+        """plan_parametersを一括更新（SimpleNamespace対応）"""
+        if isinstance(self.plan_parameters, SimpleNamespace):
+            for key, value in params_dict.items():
+                setattr(self.plan_parameters, key, value)
+        else:
+            self.plan_parameters.update(params_dict)
+    
+    def _normalize_trino_table_name(self, full_name):
+        """
+        Trinoのフルテーブル名から純粋なテーブル名を抽出
+        
+        入力例: iceberg:accidents.nesreca$data@4293306324159404154
+        出力例: nesreca
+        
+        形式:
+        - catalog:schema.table$data@snapshotId
+        - catalog:schema.table
+        - schema.table
+        - table
+        """
+        # $data@... のようなサフィックスを削除
+        if '$' in full_name:
+            full_name = full_name.split('$')[0]
+        
+        # catalog:schema.table から table を抽出
+        if ':' in full_name:
+            # catalog部分を削除
+            full_name = full_name.split(':', 1)[1]
+        
+        # schema.table から table を抽出
+        if '.' in full_name:
+            # 最後のドットの後ろがテーブル名
+            full_name = full_name.split('.')[-1]
+        
+        return full_name
     
     def _parse_duration_to_ms(self, value_str, unit_str):
         """時間表現をミリ秒に変換"""
@@ -63,29 +130,43 @@ class TrinoPlanOperator(AbstractPlanOperator):
         
         op_line = self.plain_content[0]
         
-        # 演算子名を抽出
-        op_name_match = trino_operator_regex.search(op_line)
-        if op_name_match:
-            op_name = op_name_match.group(2).strip()
-            # 演算子名をクリーンアップ
-            if '[' in op_name:
-                op_name = op_name.split('[')[0]
-            # ★ 統一インターフェースに格納
-            self.plan_parameters['op_name'] = op_name
+        # 演算子名を抽出（既に設定されている場合は上書きしない）
+        if not self._has_param('op_name'):
+            op_name_match = trino_operator_regex.search(op_line)
+            if op_name_match:
+                op_name = op_name_match.group(2).strip()
+                # 演算子名をクリーンアップ
+                if '[' in op_name:
+                    op_name = op_name.split('[')[0]
+                # ★ 統一インターフェースに格納
+                self._set_param('op_name', op_name)
         
-        # テーブル情報を抽出
-        if 'table = ' in op_line:
+        # テーブル情報を抽出（既に設定されている場合は上書きしない）
+        if not self._has_param('table') and 'table = ' in op_line:
             table_start = op_line.find('table = ')
             if table_start != -1:
                 table_start += len('table = ')
-                # 最初のスペースまでを抽出
-                table_end = op_line.find(' ', table_start)
-                if table_end == -1:
-                    table_end = op_line.find('[', table_start)
-                if table_end == -1:
+                # カンマ、スペース、角括弧のいずれかまでを抽出
+                table_end = op_line.find(',', table_start)  # カンマも区切り文字として認識
+                space_pos = op_line.find(' ', table_start)
+                bracket_pos = op_line.find('[', table_start)
+                
+                # 最も近い区切り文字を使用
+                positions = [pos for pos in [table_end, space_pos, bracket_pos] if pos != -1]
+                if positions:
+                    table_end = min(positions)
+                else:
                     table_end = len(op_line)
-                table_name = op_line[table_start:table_end]
-                self.plan_parameters.update(dict(table=table_name))
+                
+                table_full_name = op_line[table_start:table_end]
+                
+                # Trinoのテーブル名を正規化
+                # 形式: catalog:schema.table$data@snapshotId
+                # 例: iceberg:accidents.nesreca$data@4293306324159404154
+                # → nesreca を抽出
+                table_name = self._normalize_trino_table_name(table_full_name)
+                
+                self._set_param('table', table_name)
         
         # カラム情報を抽出
         if 'columns=[' in op_line:
@@ -96,7 +177,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
                 if columns_end != -1:
                     columns_str = op_line[columns_start:columns_end]
                     columns = [col.strip() for col in columns_str.split(',')]
-                    self.plan_parameters.update(dict(columns=columns))
+                    self._set_param('columns', columns)
         
         # レイアウト情報を抽出（追加の行から）
         for line in self.plain_content[1:]:
@@ -108,7 +189,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
                     if layout_end != -1:
                         layout_str = line[layout_start:layout_end]
                         layout = [col.strip() for col in layout_str.split(',')]
-                        self.plan_parameters.update(dict(layout=layout))
+                        self._set_param('layout', layout)
                 break
         
         # 結合条件を抽出（Join演算子の場合）
@@ -129,7 +210,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
                             break
                 if end > start:
                     criteria = op_line[start:end]
-                    self.plan_parameters.update(dict(criteria=criteria))
+                    self._set_param('criteria', criteria)
         
         # フィルター条件を抽出
         if 'filterPredicate = ' in op_line:
@@ -149,7 +230,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
                             break
                 if end > start:
                     filter_condition = op_line[start:end]
-                    self.plan_parameters.update(dict(filter_condition=filter_condition))
+                    self._set_param('filter_condition', filter_condition)
                     # フィルター条件の詳細解析（必要に応じて）
                     try:
                         parse_tree = parse_filter(filter_condition, parse_baseline=parse_baseline)
@@ -162,7 +243,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
         dynamic_filters_match = trino_dynamic_filters_regex.search(op_line)
         if dynamic_filters_match:
             dynamic_filters_str = dynamic_filters_match.group(1)
-            self.plan_parameters.update(dict(dynamic_filters=dynamic_filters_str))
+            self._set_param('dynamic_filters', dynamic_filters_str)
             
             # dynamicFiltersを()形式に変換してフィルター解析に使用
             # {id_upravna_enota = #df_553} -> (id_upravna_enota = #df_553)
@@ -188,7 +269,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
         if constraints_match:
             constraints_str = constraints_match.group(1)
             constraints = [constraint.strip() for constraint in constraints_str.split(',')]
-            self.plan_parameters.update(dict(constraints=constraints))
+            self._set_param('constraints', constraints)
         
         # 追加の行を解析
         for line in self.plain_content[1:]:
@@ -198,7 +279,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
             estimates_match = trino_estimates_regex.search(stripped_line)
             if estimates_match:
                 # Estimatesの生の文字列を保存（reltuples推定用）
-                self.plan_parameters.update(dict(estimates=stripped_line))
+                self._set_param('estimates', stripped_line)
                 rows_str = estimates_match.group(1)
                 size_str = estimates_match.group(2)
                 cpu_str = estimates_match.group(3) if estimates_match.group(3) else None
@@ -238,7 +319,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
                 # 行幅を計算（サイズ / 行数）
                 est_width = size_bytes / rows if rows > 0 else 0
 
-                self.plan_parameters.update({
+                self._update_params({
                     'est_rows': rows,
                     'est_size': size_bytes,
                     'est_width': est_width,
@@ -248,98 +329,90 @@ class TrinoPlanOperator(AbstractPlanOperator):
                 })
 
             # 実測CPU時間を抽出（最初に見つかった値を優先）
-            if 'act_cpu_time' not in self.plan_parameters:
+            if not self._has_param('act_cpu_time'):
                 cpu_match = trino_cpu_regex.search(stripped_line)
                 if cpu_match:
                     cpu_time = self._parse_duration_to_ms(cpu_match.group(1), cpu_match.group(2))
-                    self.plan_parameters.update(dict(act_cpu_time=cpu_time))
+                    self._set_param('act_cpu_time', cpu_time)
 
             # Scheduled時間を抽出
-            if 'act_scheduled_time' not in self.plan_parameters:
+            if not self._has_param('act_scheduled_time'):
                 scheduled_match = trino_scheduled_regex.search(stripped_line)
                 if scheduled_match:
                     scheduled_time = self._parse_duration_to_ms(scheduled_match.group(1), scheduled_match.group(2))
-                    self.plan_parameters.update(dict(act_scheduled_time=scheduled_time))
+                    self._set_param('act_scheduled_time', scheduled_time)
 
             # Blocked時間を抽出
-            if 'act_blocked_time' not in self.plan_parameters:
+            if not self._has_param('act_blocked_time'):
                 blocked_match = trino_blocked_regex.search(stripped_line)
                 if blocked_match:
                     blocked_time = self._parse_duration_to_ms(blocked_match.group(1), blocked_match.group(2))
-                    self.plan_parameters.update(dict(act_blocked_time=blocked_time))
+                    self._set_param('act_blocked_time', blocked_time)
 
             # Output情報を抽出
-            if 'act_output_rows' not in self.plan_parameters:
+            if not self._has_param('act_output_rows'):
                 output_match = trino_output_regex.search(stripped_line)
                 if output_match:
                     output_rows = int(output_match.group(1).replace(',', ''))
                     output_size = self._parse_size(output_match.group(2))
-                    self.plan_parameters.update({
-                        'act_output_rows': output_rows,
-                        'act_output_size': output_size
-                    })
+                    self._set_param('act_output_rows', output_rows)
+                    self._set_param('act_output_size', output_size)
 
             # Input情報を抽出
-            if 'act_input_rows' not in self.plan_parameters:
+            if not self._has_param('act_input_rows'):
                 input_match = trino_input_regex.search(stripped_line)
                 if input_match:
                     input_rows = int(input_match.group(1).replace(',', ''))
                     input_size = self._parse_size(input_match.group(2))
-                    self.plan_parameters.update({
-                        'act_input_rows': input_rows,
-                        'act_input_size': input_size
-                    })
+                    self._set_param('act_input_rows', input_rows)
+                    self._set_param('act_input_size', input_size)
 
             # その他のメトリクス情報
-            if 'has_metrics' not in self.plan_parameters and 'metrics:' in stripped_line:
+            if not self._has_param('has_metrics') and 'metrics:' in stripped_line:
                 # メトリクス情報の解析（必要に応じて詳細化）
-                self.plan_parameters.update(dict(has_metrics=True))
+                self._set_param('has_metrics', True)
 
         # op_line自体に含まれるメトリクスも考慮
-        if 'act_cpu_time' not in self.plan_parameters:
+        if not self._has_param('act_cpu_time'):
             cpu_match = trino_cpu_regex.search(op_line)
             if cpu_match:
                 cpu_time = self._parse_duration_to_ms(cpu_match.group(1), cpu_match.group(2))
-                self.plan_parameters.update(dict(act_cpu_time=cpu_time))
+                self._set_param('act_cpu_time', cpu_time)
 
-        if 'act_scheduled_time' not in self.plan_parameters:
+        if not self._has_param('act_scheduled_time'):
             scheduled_match = trino_scheduled_regex.search(op_line)
             if scheduled_match:
                 scheduled_time = self._parse_duration_to_ms(scheduled_match.group(1), scheduled_match.group(2))
-                self.plan_parameters.update(dict(act_scheduled_time=scheduled_time))
+                self._set_param('act_scheduled_time', scheduled_time)
 
-        if 'act_blocked_time' not in self.plan_parameters:
+        if not self._has_param('act_blocked_time'):
             blocked_match = trino_blocked_regex.search(op_line)
             if blocked_match:
                 blocked_time = self._parse_duration_to_ms(blocked_match.group(1), blocked_match.group(2))
-                self.plan_parameters.update(dict(act_blocked_time=blocked_time))
+                self._set_param('act_blocked_time', blocked_time)
 
-        if 'act_output_rows' not in self.plan_parameters:
+        if not self._has_param('act_output_rows'):
             output_match = trino_output_regex.search(op_line)
             if output_match:
                 output_rows = int(output_match.group(1).replace(',', ''))
                 output_size = self._parse_size(output_match.group(2))
-                self.plan_parameters.update({
-                    'act_output_rows': output_rows,
-                    'act_output_size': output_size
-                })
+                self._set_param('act_output_rows', output_rows)
+                self._set_param('act_output_size', output_size)
 
-        if 'act_input_rows' not in self.plan_parameters:
+        if not self._has_param('act_input_rows'):
             input_match = trino_input_regex.search(op_line)
             if input_match:
                 input_rows = int(input_match.group(1).replace(',', ''))
                 input_size = self._parse_size(input_match.group(2))
-                self.plan_parameters.update({
-                    'act_input_rows': input_rows,
-                    'act_input_size': input_size
-                })
+                self._set_param('act_input_rows', input_rows)
+                self._set_param('act_input_size', input_size)
 
-        if 'has_metrics' not in self.plan_parameters and 'metrics:' in op_line:
-            self.plan_parameters.update(dict(has_metrics=True))
+        if not self._has_param('has_metrics') and 'metrics:' in op_line:
+            self._set_param('has_metrics', True)
         
         # Estimates情報がない場合のデフォルト値設定
-        if 'est_rows' not in self.plan_parameters:
-            self.plan_parameters.update({
+        if not self._has_param('est_rows'):
+            self._update_params({
                 'est_rows': 0,
                 'est_size': 0,
                 'est_width': 0,
@@ -349,16 +422,16 @@ class TrinoPlanOperator(AbstractPlanOperator):
             })
         
         # テーブル演算子の場合、統計情報を推定（フォールバック戦略付き）
-        if 'table' in self.plan_parameters:
+        if self._has_param('table'):
             # reltuplesの推定
             reltuples = self._get_reltuples_with_fallback()
             if reltuples is not None:
-                self.plan_parameters.update(dict(reltuples=reltuples))
+                self._set_param('reltuples', reltuples)
             
             # relpagesの推定
             relpages = self._get_relpages_with_fallback()
             if relpages is not None:
-                self.plan_parameters.update(dict(relpages=relpages))
+                self._set_param('relpages', relpages)
             
             # カラム統計の推定
             self._estimate_column_stats()
@@ -369,32 +442,35 @@ class TrinoPlanOperator(AbstractPlanOperator):
     def _map_to_unified_interface(self):
         """Trino固有の特徴量を統一インターフェースにマッピング"""
         # est_rows → est_card
-        if 'est_rows' in self.plan_parameters:
-            self.plan_parameters['est_card'] = self.plan_parameters['est_rows']
+        if self._has_param('est_rows'):
+            est_rows = self._get_param('est_rows')
+            self._set_param('est_card', est_rows)
         
         # act_output_rows → act_card
-        if 'act_output_rows' in self.plan_parameters:
-            self.plan_parameters['act_card'] = self.plan_parameters['act_output_rows']
+        if self._has_param('act_output_rows'):
+            act_output_rows = self._get_param('act_output_rows')
+            self._set_param('act_card', act_output_rows)
         
         # est_width は既に設定済み
-        if 'est_width' not in self.plan_parameters:
-            self.plan_parameters['est_width'] = 0.0
+        if not self._has_param('est_width'):
+            self._set_param('est_width', 0.0)
         
         # workers_planned は Trino では通常 0
-        if 'workers_planned' not in self.plan_parameters:
-            self.plan_parameters['workers_planned'] = 0
+        if not self._has_param('workers_planned'):
+            self._set_param('workers_planned', 0)
         
         # Trino には est_cost がないので None
-        self.plan_parameters['est_cost'] = None
-        self.plan_parameters['est_startup_cost'] = None
+        self._set_param('est_cost', None)
+        self._set_param('est_startup_cost', None)
         
         # act_time は CPU時間から推定
-        if 'act_cpu_time' in self.plan_parameters:
-            self.plan_parameters['act_time'] = self.plan_parameters['act_cpu_time']
+        if self._has_param('act_cpu_time'):
+            act_cpu_time = self._get_param('act_cpu_time')
+            self._set_param('act_time', act_cpu_time)
         
         # 子ノードのカーディナリティは後で計算される
-        self.plan_parameters['act_children_card'] = 1.0
-        self.plan_parameters['est_children_card'] = 1.0
+        self._set_param('act_children_card', 1.0)
+        self._set_param('est_children_card', 1.0)
     
     def _get_reltuples_with_fallback(self):
         """フォールバック戦略付きでreltuplesを取得"""
@@ -418,7 +494,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
     
     def _extract_reltuples_from_estimates(self):
         """Estimatesからreltuplesを抽出"""
-        estimates = self.plan_parameters.get('estimates', '')
+        estimates = self._get_param('estimates', '')
         if not estimates:
             return None
         
@@ -432,7 +508,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
     
     def _get_external_table_stats(self):
         """外部統計情報からreltuplesを取得"""
-        table_name = self.plan_parameters.get('table', '')
+        table_name = self._get_param('table', '')
         if not table_name:
             return None
         
@@ -447,7 +523,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
     def _estimate_reltuples_from_datatype(self):
         """データ型からreltuplesを推定"""
         # カラム情報から推定
-        columns = self.plan_parameters.get('columns', [])
+        columns = self._get_param('columns', [])
         if not columns:
             return None
         
@@ -472,7 +548,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
     def _get_default_reltuples(self):
         """デフォルトのreltuples値を取得"""
         # テーブル名に基づくデフォルト値
-        table_name = self.plan_parameters.get('table', '').lower()
+        table_name = self._get_param('table', '').lower() if self._get_param('table') else ''
         
         # 一般的なテーブルサイズの推定
         if 'user' in table_name or 'customer' in table_name:
@@ -494,7 +570,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
     
     def _estimate_column_stats(self):
         """カラム統計を推定"""
-        columns = self.plan_parameters.get('columns', [])
+        columns = self._get_param('columns', [])
         if not columns:
             return
         
@@ -524,7 +600,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
                 column_stats[f'{column_name}_null_frac'] = null_frac
         
         if column_stats:
-            self.plan_parameters.update(column_stats)
+            self._update_params(column_stats)
     
     def _estimate_avg_width(self, column):
         """カラムの平均幅を推定"""
@@ -616,12 +692,12 @@ class TrinoPlanOperator(AbstractPlanOperator):
             # フィルターの種類を記録
             parse_tree.filter_type = filter_type
             
-            existing_filter = self.plan_parameters.get('filter_columns')
+            existing_filter = self._get_param('filter_columns')
             if existing_filter is not None:
                 parse_tree = PredicateNode(None, [existing_filter, parse_tree])
                 parse_tree.operator = LogicalOperator.AND
             
-            self.plan_parameters.update(dict(filter_columns=parse_tree))
+            self._set_param('filter_columns', parse_tree)
     
     def parse_columns_bottom_up(self, column_id_mapping, partial_column_name_mapping, table_id_mapping, alias_dict,
                                 table_samples=None, col_stats=None):
@@ -631,8 +707,9 @@ class TrinoPlanOperator(AbstractPlanOperator):
         
         # 現在のノードで考慮されるテーブルを追跡
         node_tables = set()
-        if self.plan_parameters.get('table') is not None:
-            node_tables.add(self.plan_parameters.get('table'))
+        table = self._get_param('table')
+        if table is not None:
+            node_tables.add(table)
         
         # 子ノードからテーブル情報を収集
         for c in self.children:
@@ -641,16 +718,16 @@ class TrinoPlanOperator(AbstractPlanOperator):
                                          table_samples=table_samples, col_stats=col_stats))
         
         # 子ノードのカーディナリティを計算
-        self.plan_parameters['act_children_card'] = child_prod(self, 'act_output_rows')
-        self.plan_parameters['est_children_card'] = child_prod(self, 'est_rows')
+        self._set_param('act_children_card', child_prod(self, 'act_output_rows'))
+        self._set_param('est_children_card', child_prod(self, 'est_rows'))
         
         # workers_plannedのデフォルト値を設定（Trinoでは並列度の概念が異なる）
-        if 'workers_planned' not in self.plan_parameters:
-            self.plan_parameters['workers_planned'] = 1
+        if not self._has_param('workers_planned'):
+            self._set_param('workers_planned', 1)
         
         # 出力カラムの処理（エラーが発生しても続行）
         try:
-            layout = self.plan_parameters.get('layout')
+            layout = self._get_param('layout')
             if layout:
                 output_columns = self.parse_output_columns(','.join(layout))
                 for output_column in output_columns:
@@ -666,13 +743,13 @@ class TrinoPlanOperator(AbstractPlanOperator):
                     
                     output_column['columns'] = col_ids
                 
-                self.plan_parameters.update(dict(output_columns=output_columns))
+                self._set_param('output_columns', output_columns)
         except Exception:
             # output_columnsの処理でエラーが発生しても続行（sample_vec生成のために）
             pass
         
         # フィルターカラムの処理
-        filter_columns = self.plan_parameters.get('filter_columns')
+        filter_columns = self._get_param('filter_columns')
         if filter_columns is not None:
             # 既に辞書形式の場合でも、カラムIDに変換する必要がある
             if isinstance(filter_columns, dict):
@@ -741,10 +818,10 @@ class TrinoPlanOperator(AbstractPlanOperator):
                             elif len(sample_vec) > 1000:
                                 sample_vec = sample_vec[:1000]
                             
-                            self.plan_parameters['sample_vec'] = sample_vec
+                            self._set_param('sample_vec', sample_vec)
                         else:
                             # PredicateNode形式でない場合は空のsample_vecを設定
-                            self.plan_parameters['sample_vec'] = [0] * 1000
+                            self._set_param('sample_vec', [0] * 1000)
                     except Exception as e:
                         # sample_vec生成に失敗した場合は空のsample_vecを設定
                         # デバッグ用: エラーを出力（最初の数回のみ）
@@ -752,28 +829,36 @@ class TrinoPlanOperator(AbstractPlanOperator):
                             self._sample_vec_error_count = 0
                         if self._sample_vec_error_count < 3:
                             import traceback
-                            print(f"Warning: Failed to generate sample_vec for {self.plan_parameters.get('op_name', 'Unknown')}: {e}")
+                            op_name = self._get_param('op_name', 'Unknown')
+                            print(f"Warning: Failed to generate sample_vec for {op_name}: {e}")
                             traceback.print_exc()
                             self._sample_vec_error_count += 1
-                        self.plan_parameters['sample_vec'] = [0] * 1000
+                        self._set_param('sample_vec', [0] * 1000)
                 else:
                     # テーブルサンプルがない場合は空のsample_vecを設定
-                    self.plan_parameters['sample_vec'] = [0] * 1000
+                    self._set_param('sample_vec', [0] * 1000)
                 
                 # to_dict()を呼び出して辞書形式に変換
-                self.plan_parameters['filter_columns'] = filter_columns.to_dict()
+                self._set_param('filter_columns', filter_columns.to_dict())
         
         # テーブルIDに変換
-        table = self.plan_parameters.get('table')
+        table = self._get_param('table')
         if table is not None:
             # QueryFormer互換性のため、'tablename'フィールドも設定
-            if 'tablename' not in self.plan_parameters:
-                self.plan_parameters['tablename'] = table
+            if not self._has_param('tablename'):
+                self._set_param('tablename', table)
             
-            if table in table_id_mapping:
-                self.plan_parameters['table'] = table_id_mapping[table]
-            else:
-                del self.plan_parameters['table']
+            # table_id_mappingが空でない場合のみID変換を行う
+            if table_id_mapping:
+                if table in table_id_mapping:
+                    self._set_param('table', table_id_mapping[table])
+                else:
+                    # マッピングにない場合は削除（QueryFormer互換性のため）
+                    if isinstance(self.plan_parameters, SimpleNamespace):
+                        delattr(self.plan_parameters, 'table')
+                    else:
+                        del self.plan_parameters['table']
+            # table_id_mappingが空の場合は、文字列テーブル名をそのまま保持
         
         return node_tables
     
@@ -805,10 +890,18 @@ class TrinoPlanOperator(AbstractPlanOperator):
     
     def merge_recursively(self, node):
         """別のノードと再帰的にマージ"""
-        assert self.plan_parameters['op_name'] == node.plan_parameters['op_name']
+        self_op_name = self._get_param('op_name')
+        node_op_name = node._get_param('op_name') if hasattr(node, '_get_param') else getattr(node.plan_parameters, 'op_name', None) if isinstance(node.plan_parameters, SimpleNamespace) else node.plan_parameters.get('op_name')
+        assert self_op_name == node_op_name
         assert len(self.children) == len(node.children)
         
-        self.plan_parameters.update(node.plan_parameters)
+        # node.plan_parametersから全ての属性をコピー
+        if isinstance(node.plan_parameters, SimpleNamespace):
+            for key in vars(node.plan_parameters):
+                self._set_param(key, getattr(node.plan_parameters, key))
+        else:
+            self._update_params(node.plan_parameters)
+        
         for self_c, c in zip(self.children, node.children):
             self_c.merge_recursively(c)
     
@@ -820,7 +913,8 @@ class TrinoPlanOperator(AbstractPlanOperator):
     
     def min_card(self):
         """最小カーディナリティを取得"""
-        act_card = self.plan_parameters.get('act_output_rows')
+        # SimpleNamespace 統一後は getattr を使用
+        act_card = getattr(self.plan_parameters, 'act_output_rows', None)
         if act_card is None:
             act_card = math.inf
         

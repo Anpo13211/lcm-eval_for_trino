@@ -148,7 +148,7 @@ def collect_operator_types(plans) -> Dict[str, int]:
     op_types = set()
     
     def extract_op_types(plan):
-        op_name = plan.plan_parameters.get('op_name')
+        op_name = getattr(plan.plan_parameters, 'op_name', None)
         if op_name:
             op_types.add(op_name)
         for child in plan.children:
@@ -188,7 +188,7 @@ def extract_flat_features(plan, op_idx_dict: Dict[str, int], use_act_card=True):
     feature_row_vec = np.zeros(no_ops)
     
     def extract_features_recursive(p):
-        op_name = p.plan_parameters.get('op_name')
+        op_name = getattr(p.plan_parameters, 'op_name', None)
         if not op_name:
             return
         
@@ -202,24 +202,18 @@ def extract_flat_features(plan, op_idx_dict: Dict[str, int], use_act_card=True):
         
         # カーディナリティの抽出
         if use_act_card:
-            # 実際のカーディナリティを使用
-            if 'act_output_rows' in p.plan_parameters:
-                card = p.plan_parameters['act_output_rows']
-            elif 'act_card' in p.plan_parameters:
-                card = p.plan_parameters['act_card']
-            elif 'est_rows' in p.plan_parameters:
+            # 実際のカーディナリティを使用（SimpleNamespace対応）
+            card = getattr(p.plan_parameters, 'act_output_rows', None)
+            if card is None:
+                card = getattr(p.plan_parameters, 'act_card', None)
+            if card is None:
                 # フォールバック: 実際のカーディナリティがない場合は推定値を使用
-                card = p.plan_parameters['est_rows']
-            else:
-                card = 0
+                card = getattr(p.plan_parameters, 'est_rows', 0)
         else:
-            # 推定カーディナリティを使用
-            if 'est_rows' in p.plan_parameters:
-                card = p.plan_parameters['est_rows']
-            elif 'est_card' in p.plan_parameters:
-                card = p.plan_parameters['est_card']
-            else:
-                card = 0
+            # 推定カーディナリティを使用（SimpleNamespace対応）
+            card = getattr(p.plan_parameters, 'est_rows', None)
+            if card is None:
+                card = getattr(p.plan_parameters, 'est_card', 0)
         
         feature_row_vec[op_idx] += card
         

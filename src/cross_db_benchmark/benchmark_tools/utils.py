@@ -16,14 +16,17 @@ def load_schema_json(dataset, prefer_zero_shot=False):
     """
     # パスの候補リスト
     paths = []
+    # Docker環境とローカル環境の両方に対応
+    zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
+    
     if prefer_zero_shot:
         # zero-shot_datasets配下を優先
-        paths.append(os.path.join('/Users/an/query_engine/lakehouse/zero-shot_datasets', dataset, 'schema.json'))
+        paths.append(os.path.join(zero_shot_base, dataset, 'schema.json'))
         paths.append(os.path.join('cross_db_benchmark/datasets/', dataset, 'schema.json'))
     else:
         # 従来のパスを優先（後方互換性）
         paths.append(os.path.join('cross_db_benchmark/datasets/', dataset, 'schema.json'))
-        paths.append(os.path.join('/Users/an/query_engine/lakehouse/zero-shot_datasets', dataset, 'schema.json'))
+        paths.append(os.path.join(zero_shot_base, dataset, 'schema.json'))
     
     # 存在するパスを探す
     for schema_path in paths:
@@ -48,14 +51,17 @@ def load_column_statistics(dataset, namespace=True, prefer_zero_shot=False):
     """
     # パスの候補リスト
     paths = []
+    # Docker環境とローカル環境の両方に対応
+    zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
+    
     if prefer_zero_shot:
         # zero-shot_datasets配下を優先
-        paths.append(os.path.join('/Users/an/query_engine/lakehouse/zero-shot_datasets', dataset, 'column_statistics.json'))
+        paths.append(os.path.join(zero_shot_base, dataset, 'column_statistics.json'))
         paths.append(os.path.join('cross_db_benchmark/datasets/', dataset, 'column_statistics.json'))
     else:
         # 従来のパスを優先（後方互換性）
         paths.append(os.path.join('cross_db_benchmark/datasets/', dataset, 'column_statistics.json'))
-        paths.append(os.path.join('/Users/an/query_engine/lakehouse/zero-shot_datasets', dataset, 'column_statistics.json'))
+        paths.append(os.path.join(zero_shot_base, dataset, 'column_statistics.json'))
     
     # 存在するパスを探す
     for path in paths:

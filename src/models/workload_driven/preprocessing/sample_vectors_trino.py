@@ -357,22 +357,14 @@ def augment_sample(table_samples: Dict[str, pd.DataFrame],
                 elif len(sample_vec) > 1000:
                     sample_vec = sample_vec[:1000]
             
-            # SimpleNamespaceまたは辞書に設定
-            if hasattr(p_node.plan_parameters, '__dict__'):
-                setattr(p_node.plan_parameters, 'sample_vec', sample_vec)
-            elif isinstance(p_node.plan_parameters, dict):
-                p_node.plan_parameters['sample_vec'] = sample_vec
-            else:
-                # 新しく辞書として設定
-                p_node.plan_parameters = {'sample_vec': sample_vec}
+            # SimpleNamespace に設定（統一後）
+            p_node.plan_parameters.sample_vec = sample_vec
                 
         except Exception as e:
+            # SimpleNamespace 統一後は getattr で統一的にアクセス
             op_name = 'Unknown'
             if hasattr(p_node, 'plan_parameters'):
-                if hasattr(p_node.plan_parameters, '__dict__'):
-                    op_name = vars(p_node.plan_parameters).get('op_name', 'Unknown')
-                elif isinstance(p_node.plan_parameters, dict):
-                    op_name = p_node.plan_parameters.get('op_name', 'Unknown')
+                op_name = getattr(p_node.plan_parameters, 'op_name', 'Unknown')
             
             # エラー出力（最初の数回のみ）
             if not hasattr(augment_sample, '_error_count'):
@@ -383,11 +375,8 @@ def augment_sample(table_samples: Dict[str, pd.DataFrame],
                 traceback.print_exc()
                 augment_sample._error_count += 1
             
-            # エラー時も空のsample_vecを設定
-            if hasattr(p_node.plan_parameters, '__dict__'):
-                setattr(p_node.plan_parameters, 'sample_vec', [0] * 1000)
-            elif isinstance(p_node.plan_parameters, dict):
-                p_node.plan_parameters['sample_vec'] = [0] * 1000
+            # エラー時も空のsample_vecを設定（SimpleNamespace統一後）
+            p_node.plan_parameters.sample_vec = [0] * 1000
     
     # 子ノードを再帰的に処理
     if hasattr(p_node, 'children') and p_node.children:

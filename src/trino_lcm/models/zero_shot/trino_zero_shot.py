@@ -116,13 +116,17 @@ class TrinoZeroShotModel(FcOutModel):
             ]
 
             # 述語の深い方から浅い方へのメッセージパッシング
+            # Trinoでは (filter_column, intra_predicate, filter_column) などのエッジも存在するため、
+            # n_destを指定せずにすべてのintra_predicateエッジを処理する
             if g.max_pred_depth is not None and g.max_pred_depth > 0:
-                for d in reversed(range(g.max_pred_depth)):
-                    pd = PassDirection(model_name='intra_pred',
-                                       g=g,
-                                       e_name='intra_predicate',
-                                       n_dest=f'logical_pred_{d}')
-                    pass_directions.append(pd)
+                # まず、すべてのintra_predicateエッジを深度に関係なく処理
+                # これにより filter_column -> filter_column のエッジも処理される
+                pd_all_predicates = PassDirection(model_name='intra_pred',
+                                                  g=g,
+                                                  e_name='intra_predicate',
+                                                  allow_empty=True)  # エッジが存在しない場合もエラーにしない
+                if len(pd_all_predicates.etypes) > 0:
+                    pass_directions.append(pd_all_predicates)
 
             # フィルターカラムと出力カラムからプランへ
             pass_directions.append(PassDirection(model_name='to_plan', g=g, e_name='to_plan'))

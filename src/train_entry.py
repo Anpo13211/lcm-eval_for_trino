@@ -1,7 +1,7 @@
 """Unified training entry point for Trino-related experiments.
 
 This module provides a thin wrapper around the specialised training scripts
-in :mod:`trino_lcm.scripts` and :mod:`train_trino`.  Users can now launch any
+in :mod:`trino_lcm.scripts`.  Users can now launch any
 of the supported training pipelines through a single CLI or by calling
 ``run_training`` programmatically, without needing to remember the location of
 the individual scripts.
@@ -13,10 +13,7 @@ import argparse
 from types import ModuleType
 from typing import Dict, Iterable, Optional, Sequence
 
-from trino_lcm.scripts import train_flat_vector, train_zeroshot
-
-# ``train_trino`` lives at the repository root ``src/`` directory.
-import train_trino
+from trino_lcm.scripts import train_flat_vector, train_zeroshot, train_queryformer, train_dace
 
 
 def _available_modules() -> Dict[str, ModuleType]:
@@ -25,7 +22,8 @@ def _available_modules() -> Dict[str, ModuleType]:
     return {
         "flat-vector": train_flat_vector,
         "zero-shot": train_zeroshot,
-        "query-former": train_trino,
+        "query-former": train_queryformer,
+        "dace": train_dace,
     }
 
 

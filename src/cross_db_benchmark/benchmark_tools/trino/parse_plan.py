@@ -316,14 +316,24 @@ def parse_trino_plan_simple(plan_text):
             
             # TrinoPlanOperatorを作成して詳細解析
             from cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOperator
+            from types import SimpleNamespace
             trino_operator = TrinoPlanOperator(operator['lines'])
-            trino_operator.plan_parameters['op_name'] = operator['name']
-            trino_operator.plan_parameters['fragment_id'] = fragment['id']
-            trino_operator.plan_parameters['fragment_type'] = fragment['type']
+            # SimpleNamespace対応: ヘルパーメソッドまたは直接setattrを使用
+            if isinstance(trino_operator.plan_parameters, SimpleNamespace):
+                setattr(trino_operator.plan_parameters, 'op_name', operator['name'])
+                setattr(trino_operator.plan_parameters, 'fragment_id', fragment['id'])
+                setattr(trino_operator.plan_parameters, 'fragment_type', fragment['type'])
+            else:
+                trino_operator.plan_parameters['op_name'] = operator['name']
+                trino_operator.plan_parameters['fragment_id'] = fragment['id']
+                trino_operator.plan_parameters['fragment_type'] = fragment['type']
             trino_operator.parse_lines_recursively()
             
-            # 解析された情報を演算子に追加
-            operator.update(trino_operator.plan_parameters)
+            # 解析された情報を演算子に追加（SimpleNamespaceから辞書に変換）
+            if isinstance(trino_operator.plan_parameters, SimpleNamespace):
+                operator.update(vars(trino_operator.plan_parameters))
+            else:
+                operator.update(trino_operator.plan_parameters)
             
         all_operators.extend(fragment_operators)
     
@@ -441,14 +451,21 @@ def count_indent_depth(line):
 
 def create_trino_plan_operator(operator_info):
     """演算子情報からTrinoPlanOperatorを作成"""
+    from types import SimpleNamespace
     operator = TrinoPlanOperator(operator_info['lines'])
-    operator.plan_parameters['op_name'] = operator_info['name']
-    operator.plan_parameters['depth'] = operator_info['depth']
-    # Fragment情報を設定
-    if 'fragment_id' in operator_info:
-        operator.plan_parameters['fragment_id'] = operator_info['fragment_id']
-    if 'fragment_type' in operator_info:
-        operator.plan_parameters['fragment_type'] = operator_info['fragment_type']
+    
+    # operator_infoに含まれるすべての情報をplan_parametersにコピー
+    # これにより、parse_trino_plan_simpleで抽出されたテーブル情報などが保持される
+    for key, value in operator_info.items():
+        if key not in ['lines', 'children']:  # linesとchildrenは除外
+            if isinstance(operator.plan_parameters, SimpleNamespace):
+                setattr(operator.plan_parameters, key, value)
+            else:
+                operator.plan_parameters[key] = value
+    
+    # 注: plan_parametersのSimpleNamespace変換は、parse_lines()の後に行う
+    # （parse_lines()が辞書を前提としているため）
+    
     return operator
 
 
@@ -459,13 +476,13 @@ def extract_join_conditions_trino(root_operator):
     def traverse_plan(node):
         """プランを再帰的に走査して結合条件を収集"""
         # 現在のノードがJoin演算子かチェック
-        op_name = node.plan_parameters.get('op_name', '').lower()
+        op_name = getattr(node.plan_parameters, 'op_name', '').lower()
         
         # Join演算子の検出（InnerJoin, LeftJoin, RightJoin, FullJoin, CrossJoinなど）
         if 'join' in op_name:
             # criteriaパラメータから結合条件を抽出
             # InnerJoin[criteria = (id_upravna_enota = upravna_enota_4), ...]のような形式
-            criteria = node.plan_parameters.get('criteria')
+            criteria = getattr(node.plan_parameters, 'criteria', None)
             if criteria:
                 # 括弧を除去して結合条件を正規化
                 join_cond = criteria.strip('()')
@@ -473,7 +490,7 @@ def extract_join_conditions_trino(root_operator):
                     join_conds.append(join_cond)
             else:
                 # filterPredicateから結合条件を推測（結合条件らしいフィルタを探す）
-                filter_condition = node.plan_parameters.get('filter_condition')
+                filter_condition = getattr(node.plan_parameters, 'filter_condition', None)
                 if filter_condition:
                     # 等号を含むフィルタを結合条件として扱う
                     if '=' in filter_condition and '.' in filter_condition:
@@ -645,6 +662,29 @@ def parse_trino_plans(run_stats, min_runtime=100, max_runtime=30000, parse_basel
     return parsed_runs, stats
 
 
+def convert_plan_parameters_to_namespace(node):
+    """
+    全ノードのplan_parametersを辞書からSimpleNamespaceに変換
+    
+    これにより、PostgreSQLと統一されたアクセス方法が可能になる:
+    - 辞書: node.plan_parameters['op_name']
+    - SimpleNamespace: node.plan_parameters.op_name (← 統一後)
+    
+    Args:
+        node: ルートノード（再帰的に全子ノードも変換）
+    """
+    from types import SimpleNamespace
+    
+    # plan_parametersが辞書の場合のみSimpleNamespaceに変換
+    if isinstance(node.plan_parameters, dict):
+        node.plan_parameters = SimpleNamespace(**node.plan_parameters)
+    
+    # 子ノードも再帰的に変換
+    if hasattr(node, 'children') and node.children:
+        for child in node.children:
+            convert_plan_parameters_to_namespace(child)
+
+
 def build_hierarchy(operators, all_fragment_operators=None):
     """演算子のリストを階層構造に変換（全Fragmentの演算子を含む）"""
     if not operators:
@@ -664,13 +704,18 @@ def build_hierarchy(operators, all_fragment_operators=None):
     root_operator.parse_lines_recursively()
     
     # 子ノードのカーディナリティを計算とoutput_columnsの生成（Trino用に簡略化）
+    # 注: この処理は plan_parameters が辞書形式のままで実行される
     try:
         root_operator.parse_columns_bottom_up({}, {}, {}, alias_dict={}, table_samples=None, col_stats=None)
     except (KeyError, ValueError) as e:
         # Trinoの複雑なカラム名に対応するため、エラーを無視してoutput_columnsのみ生成
         print(f"⚠️  parse_columns_bottom_upでエラー（無視）: {e}")
-        # 手動でoutput_columnsを生成
-        generate_output_columns_manually(root_operator)
+        # 手動でoutput_columnsを生成（この時点ではまだ辞書形式）
+        # generate_output_columns_manually(root_operator)
+    
+    # 全ての処理が完了した後、plan_parametersをSimpleNamespaceに変換
+    # これにより、PostgreSQLと統一されたアクセス方法が可能になる
+    convert_plan_parameters_to_namespace(root_operator)
     
     return root_operator
 
@@ -679,12 +724,14 @@ def generate_output_columns_manually(node, is_root=True):
     """手動でoutput_columnsを生成（Trino用）- ルートノードのみ"""
     # ルートノードのみでoutput_columnsを生成（中間演算子の複雑なカラム名を避ける）
     if is_root:
-        if 'layout' in node.plan_parameters:
-            layout = node.plan_parameters['layout']
+        # plan_parametersがSimpleNamespaceの場合は hasattr を使用
+        if hasattr(node.plan_parameters, 'layout'):
+            layout = node.plan_parameters.layout
             if layout:
                 try:
                     output_columns = node.parse_output_columns(','.join(layout))
-                    node.plan_parameters['output_columns'] = output_columns
+                    # SimpleNamespaceは動的に属性を追加できる
+                    node.plan_parameters.output_columns = output_columns
                 except Exception as e:
                     print(f"⚠️  output_columns生成でエラー（無視）: {e}")
     
@@ -694,7 +741,14 @@ def generate_output_columns_manually(node, is_root=True):
 
 
 def integrate_all_fragments(root_operator, all_fragment_operators):
-    """全Fragmentの演算子を統合（テーブル情報を含む）"""
+    """
+    全Fragmentの演算子を統合（RemoteSourceを通じた正しい階層構造）
+    
+    RemoteSource[sourceFragmentIds = [X]] は Fragment X を子として参照する。
+    この関数は、各 RemoteSource の下に参照先 Fragment の演算子を正しく配置する。
+    """
+    import re
+    
     # 存在するFragmentを動的に検出
     fragment_ids = set()
     for operator in all_fragment_operators:
@@ -704,13 +758,62 @@ def integrate_all_fragments(root_operator, all_fragment_operators):
     
     print(f"🔍 検出されたFragment: {sorted(fragment_ids)}")
     
-    # Fragment 1以外のすべてのFragmentの演算子を追加
+    # Fragment ごとに演算子をグループ化
+    fragment_operators = {}
     for operator in all_fragment_operators:
         fragment_id = operator.get('fragment_id', '')
-        if fragment_id != '1':  # Fragment 1以外のすべてのFragment
-            # テーブル演算子を子ノードとして追加
-            child_operator = create_trino_plan_operator(operator)
-            root_operator.children.append(child_operator)
+        if fragment_id:
+            if fragment_id not in fragment_operators:
+                fragment_operators[fragment_id] = []
+            fragment_operators[fragment_id].append(operator)
+    
+    # RemoteSource ノードを見つけて、参照先 Fragment を子として接続
+    def attach_fragments_to_remote_sources(node):
+        """
+        再帰的にRemoteSourceを探し、sourceFragmentIdsで参照されている
+        Fragmentの演算子を子として接続する
+        """
+        op_name = getattr(node.plan_parameters, 'op_name', '')
+        
+        if op_name == 'RemoteSource':
+            # sourceFragmentIds を抽出
+            source_fragment_ids = []
+            # TrinoPlanOperatorでは lines は plain_content として保存される
+            if hasattr(node, 'plain_content') and node.plain_content:
+                for line in node.plain_content:
+                    match = re.search(r'sourceFragmentIds\s*=\s*\[([^\]]+)\]', line)
+                    if match:
+                        # "2" or "3, 4" のような形式
+                        ids_str = match.group(1)
+                        source_fragment_ids = [fid.strip() for fid in ids_str.split(',')]
+                        break
+            
+            # 参照先 Fragment の演算子を子として追加
+            for frag_id in source_fragment_ids:
+                if frag_id in fragment_operators:
+                    # Fragment の演算子を階層構造に変換
+                    frag_ops = fragment_operators[frag_id]
+                    if frag_ops:
+                        # Fragment のルート演算子を作成（最初の演算子）
+                        frag_root = create_trino_plan_operator(frag_ops[0])
+                        
+                        # Fragment 内の子ノードを再帰的に構築
+                        if len(frag_ops) > 1:
+                            build_children(frag_root, frag_ops, 1, frag_ops[0]['depth'])
+                        
+                        # RemoteSource の子として追加
+                        node.children.append(frag_root)
+                        
+                        # Fragment の演算子を処理済みとしてマーク（重複を避ける）
+                        # この Fragment に含まれる RemoteSource も再帰的に処理
+                        attach_fragments_to_remote_sources(frag_root)
+        
+        # 既存の子ノードも再帰的に処理
+        for child in list(node.children):  # list() でコピーして、追加中の変更を避ける
+            attach_fragments_to_remote_sources(child)
+    
+    # ルートから RemoteSource を探して Fragment を接続
+    attach_fragments_to_remote_sources(root_operator)
 
 
 def build_children(parent, operators, start_idx, parent_depth):

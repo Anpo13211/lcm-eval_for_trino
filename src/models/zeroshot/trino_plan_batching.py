@@ -65,10 +65,11 @@ def load_database_statistics(
 def encode(column, plan_params, feature_statistics):
     """特徴量をエンコードする"""
     # fallback in case actual cardinality is not in plan parameters
-    if column == 'act_output_rows' and column not in plan_params:
+    # SimpleNamespace 統一後は hasattr を使用
+    if column == 'act_output_rows' and not hasattr(plan_params, column):
         value = 0
     else:
-        value = plan_params[column]
+        value = getattr(plan_params, column, 0)
     
     if feature_statistics[column].get('type') == str(FeatureType.numeric):
         enc_value = feature_statistics[column]['scaler'].transform(np.array([[value]])).item()
@@ -77,14 +78,24 @@ def encode(column, plan_params, feature_statistics):
         if isinstance(value, list) and len(value) == 1:
             value = value[0]
         
-        # 未知の演算子名に対して動的にインデックスを割り当て
+        # 未知の演算子名の処理
+        # モデル初期化後の動的追加はembeddingテーブルサイズ不足の原因になるため、
+        # 未知の値が見つかった場合は安全なデフォルト値を使用
         if str(value) not in value_dict:
-            # 新しいインデックスを割り当て（既存の最大値+1）
-            max_index = max(value_dict.values()) if value_dict else -1
-            value_dict[str(value)] = max_index + 1
-            print(f"⚠️  未知の演算子名 '{value}' にインデックス {max_index + 1} を割り当てました")
-        
-        enc_value = value_dict[str(value)]
+            no_vals = feature_statistics[column].get('no_vals', len(value_dict))
+            # デフォルト値として0を使用（通常は最も一般的な値）
+            if 0 in value_dict.values():
+                # 値が0のキーを探す
+                default_key = [k for k, v in value_dict.items() if v == 0][0]
+                enc_value = 0
+                print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using default index 0 (mapped from '{default_key}')")
+            else:
+                # 0が存在しない場合は、最小インデックスを使用
+                min_index = min(value_dict.values()) if value_dict else 0
+                enc_value = min_index
+                print(f"Warning: Unknown {column} value '{value}' (type: {type(value).__name__}), using minimum index {min_index} (no_vals={no_vals})")
+        else:
+            enc_value = value_dict[str(value)]
     else:
         raise NotImplementedError
     return enc_value
@@ -152,16 +163,16 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
     # プランの特徴量を抽出
     plan_feat = []
     for feat_name in plan_featurization.VARIABLES['plan']:
-        if feat_name in node.plan_parameters:
+        if hasattr(node.plan_parameters, feat_name):
             # Trinoの特徴量名をPostgreSQL互換に変換
             if feat_name == 'act_output_rows':
                 # PostgreSQLのact_cardに対応
-                value = node.plan_parameters[feat_name]
+                value = getattr(node.plan_parameters, feat_name)
             elif feat_name == 'est_rows':
                 # PostgreSQLのest_cardに対応
-                value = node.plan_parameters[feat_name]
+                value = getattr(node.plan_parameters, feat_name)
             else:
-                value = node.plan_parameters[feat_name]
+                value = getattr(node.plan_parameters, feat_name)
             
             enc_value = encode(feat_name, node.plan_parameters, feature_statistics)
             plan_feat.append(enc_value)
@@ -176,8 +187,8 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
         plan_to_plan_edges.append((current_plan_id, parent_node_id))
     
     # テーブル情報の処理
-    if 'table' in node.plan_parameters:
-        table_name = node.plan_parameters['table']
+    if hasattr(node.plan_parameters, 'table'):
+        table_name = getattr(node.plan_parameters, 'table')
         
         # テーブルのインデックスを取得または作成
         if table_name not in table_idx:
@@ -213,9 +224,9 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
                     value = table_stats_dict[feat_name]
                     enc_value = encode(feat_name, table_stats_dict, feature_statistics)
                     table_feat.append(enc_value)
-                elif feat_name in node.plan_parameters:
-                    # プランパラメータから取得
-                    value = node.plan_parameters[feat_name]
+                elif hasattr(node.plan_parameters, feat_name):
+                    # プランパラメータから取得（SimpleNamespace対応）
+                    value = getattr(node.plan_parameters, feat_name)
                     enc_value = encode(feat_name, node.plan_parameters, feature_statistics)
                     table_feat.append(enc_value)
                 else:
@@ -229,8 +240,8 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
     
     
     # 出力カラム情報の処理
-    if 'output_columns' in node.plan_parameters:
-        output_columns = node.plan_parameters['output_columns']
+    if hasattr(node.plan_parameters, 'output_columns'):
+        output_columns = getattr(node.plan_parameters, 'output_columns')
         for output_col in output_columns:
             output_col_key = (
                 output_col.get('aggregation'),
@@ -278,7 +289,7 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
                 column_to_output_column_edges.append((column_node_id, output_column_node_id))
     
     # フィルター情報の処理
-    filter_column = node.plan_parameters.get('filter_columns')
+    filter_column = getattr(node.plan_parameters, 'filter_columns', None)
     if filter_column:
         filter_column_dict = predicate_to_dict(filter_column)
         parse_predicates(

@@ -106,7 +106,8 @@ def evaluate_with_metrics(bst, X, y, dataset_name="Test"):
     return results
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for Flat-Vector training."""
     parser = argparse.ArgumentParser(
         description='Train Trino Flat-Vector Model (Trino向け再実装版)'
     )
@@ -135,7 +136,11 @@ def main():
     parser.add_argument('--use_act_card', action='store_true',
                         help='実際のカーディナリティを使用（デフォルト: 推定カーディナリティ）')
     
-    args = parser.parse_args()
+    return parser
+
+
+def run(args) -> int:
+    """Run Flat-Vector training with parsed arguments."""
     
     # ランダムシードの設定
     np.random.seed(args.seed)

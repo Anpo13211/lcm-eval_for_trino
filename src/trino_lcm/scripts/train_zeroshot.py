@@ -269,11 +269,62 @@ def create_feature_statistics_from_plans(plans, plan_featurization, output_path=
     """
     print("📊 プランから特徴量統計を収集中...")
     
-    # ダミーの統計情報から開始（動的に拡張）
-    feature_statistics = create_dummy_feature_statistics(plan_featurization)
+    # 実際に使用されている演算子を収集（op_name用）
+    actual_op_names = set()
+    # フィルター演算子も収集（operator用）
+    filter_operators = set()
     
-    # TODO: 実際のプランから統計を収集して更新
-    # この部分は、より正確な統計情報が必要な場合に実装
+    def collect_operators(node):
+        if hasattr(node, 'plan_parameters'):
+            params = node.plan_parameters if isinstance(node.plan_parameters, dict) else vars(node.plan_parameters)
+            op_name = params.get('op_name')
+            if op_name:
+                actual_op_names.add(op_name)
+            
+            # フィルター演算子を収集
+            filter_col = params.get('filter_columns')
+            if filter_col:
+                def collect_filter_ops(filter_node):
+                    # PredicateNodeオブジェクトの場合
+                    if hasattr(filter_node, 'operator'):
+                        op = filter_node.operator
+                        if op is not None:
+                            filter_operators.add(str(op))
+                    # 辞書形式の場合
+                    elif isinstance(filter_node, dict) and 'operator' in filter_node:
+                        op = filter_node['operator']
+                        if op is not None:
+                            filter_operators.add(str(op))
+                    
+                    # 子ノードを再帰的に処理（両形式に対応）
+                    children = None
+                    if hasattr(filter_node, 'children'):
+                        children = filter_node.children
+                    elif isinstance(filter_node, dict) and 'children' in filter_node:
+                        children = filter_node['children']
+                    
+                    if children:
+                        for child in children:
+                            collect_filter_ops(child)
+                
+                collect_filter_ops(filter_col)
+        
+        if hasattr(node, 'children'):
+            for child in node.children:
+                collect_operators(child)
+    
+    for plan in plans:
+        collect_operators(plan)
+    
+    print(f"  - 検出されたプラン演算子 (op_name): {sorted(actual_op_names)}")
+    print(f"  - 検出されたフィルター演算子 (operator): {sorted(filter_operators)}")
+    
+    # ダミーの統計情報から開始（実際の演算子を含むように更新）
+    feature_statistics = create_dummy_feature_statistics(
+        plan_featurization, 
+        actual_op_names=actual_op_names if actual_op_names else None,
+        filter_operators=filter_operators if filter_operators else None
+    )
     
     if output_path:
         with open(output_path, 'w') as f:
@@ -283,8 +334,15 @@ def create_feature_statistics_from_plans(plans, plan_featurization, output_path=
     return feature_statistics
 
 
-def create_dummy_feature_statistics(plan_featurization):
-    """ダミーの特徴量統計情報を作成"""
+def create_dummy_feature_statistics(plan_featurization, actual_op_names=None, filter_operators=None):
+    """
+    ダミーの特徴量統計情報を作成
+    
+    Args:
+        plan_featurization: 特徴量化設定
+        actual_op_names: 実際に使用されているプラン演算子のセット（オプション）
+        filter_operators: 実際に使用されているフィルター演算子のセット（オプション）
+    """
     feature_statistics = {}
     
     # すべての特徴量を定義
@@ -294,32 +352,69 @@ def create_dummy_feature_statistics(plan_featurization):
     
     for feat_name in all_features:
         if feat_name == 'op_name':
-            operator_dict = {
-                'Aggregate': 0, 'LocalExchange': 1, 'RemoteSource': 2, 
-                'ScanFilter': 3, 'ScanFilterProject': 4, 'Project': 5, 
-                'InnerJoin': 6, 'HashJoin': 7, 'NestedLoopJoin': 8,
-                'Sort': 87, 'Limit': 95, 'TopN': 11,
-                'TableScan': 13, 'FilterProject': 14, 'Exchange': 15,
-                'LeftJoin': 32, 'ScanProject': 60, 'Filter': 61,
-            }
+            if actual_op_names:
+                # 実際のプランから収集した演算子を使用し、連続したIDを割り当てる
+                sorted_ops = sorted(actual_op_names)
+                operator_dict = {op: idx for idx, op in enumerate(sorted_ops)}
+                print(f"  - op_name: {len(sorted_ops)}個の演算子を連続IDで割り当て")
+            else:
+                # フォールバック: 元のハードコードされたマッピング（後方互換性のため）
+                operator_dict = {
+                    'Aggregate': 0, 'LocalExchange': 1, 'RemoteSource': 2,
+                    'ScanFilter': 3, 'ScanFilterProject': 4, 'Project': 5,
+                    'InnerJoin': 6, 'HashJoin': 7, 'NestedLoopJoin': 8,
+                    'Sort': 87, 'Limit': 95, 'TopN': 11,
+                    'TableScan': 13, 'FilterProject': 14, 'Exchange': 15,
+                    'LeftJoin': 32, 'ScanProject': 60, 'Filter': 61,
+                    'CrossJoin': 96,  # 実際に使用されているがマッピングにない演算子を追加
+                }
+                max_operator_id = max(operator_dict.values()) + 1
+            
+            if actual_op_names:
+                # 連続IDの場合、no_valsは演算子数に余裕を持たせる
+                # 実際の演算子数に対して十分な余裕を持たせる（将来の拡張にも対応）
+                no_vals = max(200, len(operator_dict) * 2)  # 2倍の余裕を持たせる
+            else:
+                # ハードコードされたIDの場合、最大ID+1を使用
+                max_operator_id = max(operator_dict.values()) + 1
+                no_vals = max(200, max_operator_id * 2)  # 2倍の余裕を持たせる
+            
             feature_statistics[feat_name] = {
                 'type': str(FeatureType.categorical),
                 'value_dict': operator_dict,
-                'no_vals': 200  # 動的に追加される演算子に対応するため大きめに設定
+                'no_vals': no_vals
             }
         elif feat_name == 'operator':
-            operator_dict = {
-                'Aggregate': 0, 'LocalExchange': 1, 'RemoteSource': 2, 
-                'ScanFilter': 3, 'ScanFilterProject': 4, 'Project': 5, 
-                'InnerJoin': 6, 'HashJoin': 7, 'NestedLoopJoin': 8,
-                'Sort': 87, 'Limit': 95, 'TopN': 11,
-                'TableScan': 13, 'FilterProject': 14, 'Exchange': 15,
-                'LeftJoin': 32, 'ScanProject': 60, 'Filter': 61,
-            }
+            if filter_operators:
+                # 実際のプランから収集したフィルター演算子を使用し、連続したIDを割り当てる
+                sorted_ops = sorted(filter_operators)
+                operator_dict = {op: idx for idx, op in enumerate(sorted_ops)}
+                print(f"  - operator: {len(sorted_ops)}個のフィルター演算子を連続IDで割り当て")
+            else:
+                # フォールバック: 元のハードコードされたマッピング
+                operator_dict = {
+                    'Aggregate': 0, 'LocalExchange': 1, 'RemoteSource': 2,
+                    'ScanFilter': 3, 'ScanFilterProject': 4, 'Project': 5,
+                    'InnerJoin': 6, 'HashJoin': 7, 'NestedLoopJoin': 8,
+                    'Sort': 87, 'Limit': 95, 'TopN': 11,
+                    'TableScan': 13, 'FilterProject': 14, 'Exchange': 15,
+                    'LeftJoin': 32, 'ScanProject': 60, 'Filter': 61,
+                    'CrossJoin': 96,
+                }
+            
+            if filter_operators:
+                # 連続IDの場合、余裕を持たせる
+                max_operator_id = len(operator_dict)
+                no_vals = max(200, max_operator_id * 2)  # 2倍の余裕を持たせる
+            else:
+                # ハードコードされたIDの場合
+                max_operator_id = max(operator_dict.values()) + 1
+                no_vals = max(200, max_operator_id * 2)  # 2倍の余裕を持たせる
+            
             feature_statistics[feat_name] = {
                 'type': str(FeatureType.categorical),
                 'value_dict': operator_dict,
-                'no_vals': len(operator_dict)
+                'no_vals': no_vals
             }
         elif feat_name == 'aggregation':
             # 集約関数の特徴量統計
@@ -621,9 +716,12 @@ def run(args) -> int:
             feature_statistics = json.load(f)
         print(f"  - 既存の統計情報を読み込み: {len(feature_statistics)} features")
     else:
-        # トレーニングプランから特徴量統計を収集
+        # 【重要】全プラン（train + val + test）から特徴量統計を収集
+        # embeddingテーブルはモデル初期化時に固定されるため、事前にすべての演算子を収集する必要がある
+        all_plans_for_stats = train_plans + test_plans
+        print(f"  - 統計収集対象: {len(all_plans_for_stats)}個のプラン（train + test）")
         feature_statistics = create_feature_statistics_from_plans(
-            [train_plans[i] for i in train_plans_split.indices],
+            all_plans_for_stats,
             plan_featurization,
             args.statistics_file
         )
@@ -697,7 +795,8 @@ def run(args) -> int:
     ]
     
     # Trino固有のメッセージパッシング（columnからoutput_columnへ）
-    prepasses = [dict(model_name='column_output_column', e_name='col_output_col')]
+    # エッジが存在しない場合でもエラーにならないよう allow_empty=True を使用
+    prepasses = [dict(model_name='column_output_column', e_name='col_output_col', allow_empty=True)]
     tree_model_types = ['column_output_column']
     
     model = TrinoZeroShotModel(
