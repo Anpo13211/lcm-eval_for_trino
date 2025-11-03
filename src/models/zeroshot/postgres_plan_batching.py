@@ -124,7 +124,7 @@ def plan_to_graph(node: PlanOperator, database_id, plan_depths, plan_features, p
 
     # encode output columns which can in turn have several columns as a product in the aggregation
     """
-    おそらく output_columns は以下のような形式である。（plan_operator.py の parse_output_columns で生成される）
+    output_columns は以下のような形式である。（plan_operator.py の parse_output_columns で生成される）
     output_columns = [
     {
         'aggregation': 'COUNT',  # または 'SUM', 'AVG', 'MIN', 'MAX', None

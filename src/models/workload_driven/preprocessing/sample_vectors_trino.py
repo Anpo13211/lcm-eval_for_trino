@@ -514,7 +514,20 @@ def get_table_samples_from_csv(dataset: str,
         table_path = os.path.join(data_dir, f'{table_name}.csv')
         if os.path.exists(table_path):
             try:
-                df_sample = pd.read_csv(table_path, **vars(schema.csv_kwargs))
+                # Suppress DtypeWarning for mixed types (common in CSV files)
+                import warnings
+                with warnings.catch_warnings():
+                    # Try to filter DtypeWarning (pandas version-dependent)
+                    try:
+                        warnings.filterwarnings('ignore', category=pd.errors.DtypeWarning)
+                    except AttributeError:
+                        # Fallback for older pandas versions
+                        warnings.filterwarnings('ignore', message='.*DtypeWarning.*')
+                    csv_kwargs = vars(schema.csv_kwargs).copy()
+                    # Ensure low_memory is set to avoid dtype warnings
+                    if 'low_memory' not in csv_kwargs:
+                        csv_kwargs['low_memory'] = False
+                    df_sample = pd.read_csv(table_path, **csv_kwargs)
                 if len(df_sample) > no_samples:
                     df_sample = df_sample.sample(random_state=0, n=no_samples)
                 table_samples[table_name] = df_sample

@@ -12,7 +12,8 @@ class ZeroShotModel(FcOutModel):
     """
 
     def __init__(self, model_config: ZeroShotModelConfig, device='cpu', feature_statistics=None,
-                 add_tree_model_types=None, prepasses=None, plan_featurization=None, encoders=None, label_norm=None):
+                 add_tree_model_types=None, prepasses=None, plan_featurization=None, encoders=None, label_norm=None,
+                 allow_empty_edges=False):
 
         super().__init__(output_dim=model_config.output_dim,
                          input_dim=model_config.hidden_dim,
@@ -24,9 +25,12 @@ class ZeroShotModel(FcOutModel):
         self.skip_message_passing = False
         self.device = device
         self.hidden_dim = model_config.hidden_dim
+        self.allow_empty_edges = allow_empty_edges
 
         # use different models per edge type
         # ノードタイプだけでなく、エッジタイプにも異なるモデルを適用する
+        if add_tree_model_types is None:
+            add_tree_model_types = []
         tree_model_types = add_tree_model_types + ['to_plan', 'intra_plan', 'intra_pred']
         self.tree_models = nn.ModuleDict({
             node_type: message_aggregators.__dict__[model_config.tree_layer_name](hidden_dim=self.hidden_dim, **model_config.tree_layer_kwargs)
@@ -77,45 +81,58 @@ class ZeroShotModel(FcOutModel):
 
         return out
 
-    def message_passing(self, g, feat_dict):
+    def message_passing(self, g, feat_dict, allow_empty_edges=None):
         """
         Bottom-up message passing on the graph encoding of the queries in the batch. Returns the hidden states of the
         root nodes.
+        
+        Args:
+            g: DGL graph
+            feat_dict: Feature dictionary
+            allow_empty_edges: If True, allows message passing steps with no edges (for Trino compatibility).
+                              If None, uses self.allow_empty_edges
         """
+        # 引数が指定されていない場合はインスタンス変数を使用
+        if allow_empty_edges is None:
+            allow_empty_edges = self.allow_empty_edges
 
         # also allow skipping this for testing
         if not self.skip_message_passing:
             # all passes before predicates, to plan and intra_plan passes
             pass_directions = [
-                PassDirection(g=g, **prepass_kwargs)
+                PassDirection(g=g, allow_empty=allow_empty_edges, **prepass_kwargs)
                 for prepass_kwargs in self.prepasses
             ]
 
-            if g.max_pred_depth is not None:
+            if g.max_pred_depth is not None and g.max_pred_depth > 0:
                 # intra_pred from deepest node to top node
                 for d in reversed(range(g.max_pred_depth)):
                     pd = PassDirection(model_name='intra_pred',
                                        g=g,
                                        e_name='intra_predicate',
-                                       n_dest=f'logical_pred_{d}')
+                                       n_dest=f'logical_pred_{d}',
+                                       allow_empty=allow_empty_edges)
                     pass_directions.append(pd)
 
             # filter_columns & output_columns to plan
-            pass_directions.append(PassDirection(model_name='to_plan', g=g, e_name='to_plan'))
+            pass_directions.append(PassDirection(model_name='to_plan', g=g, e_name='to_plan', allow_empty=allow_empty_edges))
 
             # intra_plan from deepest node to top node
             for d in reversed(range(g.max_depth)):
                 pd = PassDirection(model_name='intra_plan',
                                    g=g,
                                    e_name='intra_plan',
-                                   n_dest=f'plan{d}')
+                                   n_dest=f'plan{d}',
+                                   allow_empty=allow_empty_edges)
                 pass_directions.append(pd)
 
             # make sure all edge types are considered in the message passing
-            combined_e_types = set()
-            for pd in pass_directions:
-                combined_e_types.update(pd.etypes)
-            assert combined_e_types == set(g.canonical_etypes)
+            # Note: Trino版ではエッジが存在しない場合があるため、allow_empty_edges=Trueの場合はスキップ
+            if not allow_empty_edges:
+                combined_e_types = set()
+                for pd in pass_directions:
+                    combined_e_types.update(pd.etypes)
+                assert combined_e_types == set(g.canonical_etypes)
 
             for pd in pass_directions:
                 if len(pd.etypes) > 0:

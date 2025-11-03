@@ -10,8 +10,12 @@ the individual scripts.
 from __future__ import annotations
 
 import argparse
+import warnings
 from types import ModuleType
 from typing import Dict, Iterable, Optional, Sequence
+
+# Suppress torchdata deprecation warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torchdata')
 
 from trino_lcm.scripts import train_flat_vector, train_zeroshot, train_queryformer, train_dace
 

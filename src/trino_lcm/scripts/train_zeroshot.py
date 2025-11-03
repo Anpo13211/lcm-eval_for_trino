@@ -16,6 +16,10 @@ Usage:
 
 import sys
 import os
+import warnings
+
+# Suppress torchdata deprecation warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torchdata')
 
 # 環境変数の設定（必須 - import前に実行）
 for i in range(11):
@@ -45,8 +49,8 @@ import numpy as np
 from tqdm import tqdm
 
 from cross_db_benchmark.benchmark_tools.trino.parse_plan import parse_trino_plans, trino_timing_regex
-from trino_lcm.models.zero_shot import TrinoZeroShotModel, trino_plan_collator
-from models.zeroshot.trino_plan_batching import load_database_statistics
+from trino_lcm.models.zero_shot import trino_plan_collator, load_database_statistics
+from models.zeroshot.zero_shot_model import ZeroShotModel
 from training.featurizations import TrinoTrueCardDetail
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
@@ -219,12 +223,13 @@ def load_plans_from_files(file_paths, max_plans_per_file=None):
             
             # 統計情報を読み込んでdatabase_statsに設定（オプション）
             # 注意: 統計情報がない場合は空のリストで動作する
+            # 統計情報の読み込みではプラン数に制限をかけない（Noneを渡す）
             try:
                 from training.dataset.dataset_creation import read_explain_analyze_txt
                 _, db_stats_from_txt = read_explain_analyze_txt(
                     file_path,
                     path_index=file_idx,
-                    limit_per_ds=1  # 統計情報だけ取得
+                    limit_per_ds=None  # 統計情報は全クエリから取得（プラン読み込みとは独立）
                 )
                 # database_statsを更新（リスト形式に変換）
                 from types import SimpleNamespace
@@ -788,28 +793,32 @@ def run(args) -> int:
         batch_size=args.batch_size
     )
     
+    # Trino固有の設定
+    # encoders: 各ノードタイプの特徴量をエンコード
     encoders = [
-        ('plan', plan_featurization.PLAN_FEATURES),
-        ('logical_pred', plan_featurization.FILTER_FEATURES),
         ('column', plan_featurization.COLUMN_FEATURES),
         ('table', plan_featurization.TABLE_FEATURES),
+        ('output_column', plan_featurization.OUTPUT_COLUMN_FEATURES),
         ('filter_column', plan_featurization.FILTER_FEATURES + plan_featurization.COLUMN_FEATURES),
-        ('output_column', plan_featurization.OUTPUT_COLUMN_FEATURES)
+        ('plan', plan_featurization.PLAN_FEATURES),
+        ('logical_pred', plan_featurization.FILTER_FEATURES),
     ]
     
-    # Trino固有のメッセージパッシング（columnからoutput_columnへ）
-    # エッジが存在しない場合でもエラーにならないよう allow_empty=True を使用
-    prepasses = [dict(model_name='column_output_column', e_name='col_output_col', allow_empty=True)]
+    # prepasses: Trino固有のメッセージパッシング（columnからoutput_columnへ）
+    # allow_emptyはmessage_passing内でallow_empty_edgesから自動的に設定されるため、ここでは指定しない
+    prepasses = [dict(model_name='column_output_column', e_name='col_output_col')]
     tree_model_types = ['column_output_column']
     
-    model = TrinoZeroShotModel(
+    # ZeroShotModelを直接使用（allow_empty_edges=TrueでTrino対応）
+    model = ZeroShotModel(
         model_config=model_config,
         device=args.device,
         feature_statistics=feature_statistics,
         plan_featurization=plan_featurization,
         prepasses=prepasses,
         add_tree_model_types=tree_model_types,
-        encoders=encoders
+        encoders=encoders,
+        allow_empty_edges=True  # Trinoではエッジが存在しない場合があるため
     )
     
     model = model.to(args.device)

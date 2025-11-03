@@ -14,6 +14,11 @@ Usage:
         --batch_size 32
 """
 
+import warnings
+
+# Suppress torchdata deprecation warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torchdata')
+
 import argparse
 import json
 import os

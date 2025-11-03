@@ -15,12 +15,16 @@ Usage:
 
 import sys
 import os
+import warnings
 from pathlib import Path
 import argparse
 import json
 from typing import Optional, Sequence
 import numpy as np
 import torch
+
+# Suppress torchdata deprecation warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torchdata')
 
 # 環境変数の設定（必須 - import前に実行）
 for i in range(11):

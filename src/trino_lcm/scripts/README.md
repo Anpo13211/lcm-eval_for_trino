@@ -12,16 +12,13 @@ src/trino_lcm/
 │   │   └── trino_flat_vector.py
 │   └── zero_shot/
 │       ├── __init__.py
-│       ├── trino_plan_batching.py
-│       └── trino_zero_shot.py
+│       └── trino_plan_batching.py
 └── scripts/                     # このディレクトリ
     ├── README.md                # このファイル
     ├── train_flat_vector.py    # Flat-Vectorトレーニング
     ├── predict_flat_vector.py  # Flat-Vector予測
-    ├── inspect_flat_vector.py  # Flat-Vectorモデル情報
     ├── train_zeroshot.py       # Zero-Shotトレーニング
-    ├── collect_stats.py        # 統計情報収集
-    └── analyze_stats.py        # 統計情報分析
+    └── collect_stats.py        # 統計情報収集
 ```
 
 ## 🎯 Flat-Vector Model（Trino向け再実装）
@@ -82,14 +79,6 @@ PYTHONPATH=src python -m trino_lcm.scripts.predict_flat_vector \
 - `--output_file`: 出力ファイル（予測結果JSON）
 - `--use_act_card`: 実際のカーディナリティを使用（トレーニング時と同じ設定を使用）
 - `--seed`: ランダムシード（トレーニング時と同じ値を使用）
-
-#### 3. モデル情報の表示
-
-```bash
-PYTHONPATH=src python -m trino_lcm.scripts.inspect_flat_vector \
-    --model_dir models/trino_flat_vector \
-    --seed 42
-```
 
 ### 評価メトリクス
 
@@ -161,11 +150,6 @@ PYTHONPATH=src python -m trino_lcm.scripts.predict_flat_vector \
     --input_file new_queries.txt \
     --output_file predictions.json \
     --use_act_card \
-    --seed 42
-
-# 4. モデル情報の表示
-PYTHONPATH=src python -m trino_lcm.scripts.inspect_flat_vector \
-    --model_dir models/trino_flat_vector \
     --seed 42
 ```
 
