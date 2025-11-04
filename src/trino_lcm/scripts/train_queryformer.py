@@ -50,6 +50,338 @@ from training.training.checkpoint import save_checkpoint, load_checkpoint
 from sklearn.preprocessing import MinMaxScaler
 
 
+# ============================================================================
+# 共通ユーティリティ関数
+# ============================================================================
+
+def plan_to_dict(node):
+    """プランノードを辞書形式に変換（SimpleNamespaceも完全に辞書に変換）"""
+    from types import SimpleNamespace
+    
+    def convert_to_dict(obj):
+        """SimpleNamespaceやその他のオブジェクトを辞書に変換"""
+        if isinstance(obj, SimpleNamespace):
+            result = {}
+            for k, v in vars(obj).items():
+                result[k] = convert_to_dict(v)
+            return result
+        elif isinstance(obj, dict):
+            return {k: convert_to_dict(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [convert_to_dict(item) for item in obj]
+        else:
+            return obj
+    
+    result = {}
+    if hasattr(node, 'plan_parameters'):
+        if hasattr(node.plan_parameters, '__dict__'):
+            result = convert_to_dict(node.plan_parameters)
+        elif isinstance(node.plan_parameters, dict):
+            result = convert_to_dict(node.plan_parameters)
+    
+    # 'table'を'tablename'としても追加
+    if 'table' in result and 'tablename' not in result:
+        result['tablename'] = result['table']
+    
+    if hasattr(node, 'children') and node.children:
+        result['children'] = [plan_to_dict(c) for c in node.children]
+    
+    return result
+
+
+def dict_to_namespace_recursive(d):
+    """辞書を再帰的にSimpleNamespaceに変換"""
+    if isinstance(d, dict):
+        ns = SimpleNamespace()
+        for k, v in d.items():
+            if isinstance(v, dict):
+                setattr(ns, k, dict_to_namespace_recursive(v))
+            elif isinstance(v, list):
+                setattr(ns, k, [dict_to_namespace_recursive(item) if isinstance(item, dict) else item for item in v])
+            else:
+                setattr(ns, k, v)
+        return ns
+    return d
+
+
+def convert_filter_node(filter_node, column_id_mapping, partial_column_name_mapping):
+    """filter_columns（SimpleNamespace形式）のcolumnとliteralを変換"""
+    if not hasattr(filter_node, 'column'):
+        return
+    
+    # columnの変換（Noneは維持）
+    column = filter_node.column
+    if column is not None and isinstance(column, (tuple, list)):
+        if len(column) == 1:
+            col_name = str(column[0]).strip('"')
+            # Trinoエイリアス（_数字）を削除
+            import re
+            col_name_without_suffix = re.sub(r'_\d+$', '', col_name)
+            
+            # テーブル名を推測してカラムIDを取得
+            mapped = None
+            for table_name in partial_column_name_mapping.get(col_name, set()):
+                if (table_name, col_name) in column_id_mapping:
+                    mapped = column_id_mapping[(table_name, col_name)]
+                    break
+            
+            if mapped is None:
+                # サフィックス削除版で再試行
+                for table_name in partial_column_name_mapping.get(col_name_without_suffix, set()):
+                    if (table_name, col_name_without_suffix) in column_id_mapping:
+                        mapped = column_id_mapping[(table_name, col_name_without_suffix)]
+                        break
+            
+            filter_node.column = mapped
+        elif len(column) == 2:
+            table_name, col_name = column
+            table_name = str(table_name).strip('"')
+            col_name = str(col_name).strip('"')
+            filter_node.column = column_id_mapping.get((table_name, col_name))
+    
+    # literalの変換（リスト形式とシンプル形式の両方に対応）
+    literal = filter_node.literal
+    if literal is not None:
+        if isinstance(literal, list):
+            # IN句のリスト形式
+            converted_list = []
+            for item in literal:
+                if isinstance(item, str) and "'" in item:
+                    parts = item.split("'")
+                    if len(parts) >= 2:
+                        item_value = parts[1]
+                        try:
+                            if '.' in item_value:
+                                converted_list.append(float(item_value))
+                            else:
+                                converted_list.append(int(item_value))
+                        except (ValueError, TypeError):
+                            converted_list.append(item_value)
+                    else:
+                        converted_list.append(item)
+                else:
+                    converted_list.append(item)
+            filter_node.literal = converted_list
+        elif isinstance(literal, str) and "'" in literal:
+            # varchar 'B' -> 'B', bigint '343' -> 343
+            parts = literal.split("'")
+            if len(parts) >= 2:
+                literal_value = parts[1]
+                try:
+                    if '.' in literal_value:
+                        filter_node.literal = float(literal_value)
+                    else:
+                        filter_node.literal = int(literal_value)
+                except (ValueError, TypeError):
+                    filter_node.literal = literal_value
+    
+    # 子ノードを再帰的に変換
+    if hasattr(filter_node, 'children') and filter_node.children:
+        for child in filter_node.children:
+            convert_filter_node(child, column_id_mapping, partial_column_name_mapping)
+
+
+def convert_to_namespace(node, column_id_mapping, partial_column_name_mapping):
+    """辞書形式のplan_parametersとfilter_columnsをSimpleNamespaceに変換"""
+    if hasattr(node, 'plan_parameters'):
+        if isinstance(node.plan_parameters, dict):
+            # 辞書をSimpleNamespaceに変換
+            node.plan_parameters = dict_to_namespace_recursive(node.plan_parameters)
+        
+        # filter_columnsのcolumnとliteralを変換
+        if hasattr(node.plan_parameters, 'filter_columns') and node.plan_parameters.filter_columns:
+            # filter_columnsが辞書の場合は先にSimpleNamespaceに変換
+            if isinstance(node.plan_parameters.filter_columns, dict):
+                node.plan_parameters.filter_columns = dict_to_namespace_recursive(node.plan_parameters.filter_columns)
+            # その後、columnとliteralを変換
+            convert_filter_node(node.plan_parameters.filter_columns, column_id_mapping, partial_column_name_mapping)
+    
+    # 子ノードを再帰的に変換
+    if hasattr(node, 'children') and node.children:
+        for child in node.children:
+            convert_to_namespace(child, column_id_mapping, partial_column_name_mapping)
+
+
+def build_column_id_mapping(database_statistics):
+    """カラムIDマッピングを作成"""
+    column_id_mapping = {}
+    partial_column_name_mapping = {}
+    
+    for i, col_stat in enumerate(database_statistics.column_stats):
+        key = (col_stat.tablename, col_stat.attname)
+        column_id_mapping[key] = i
+        
+        if col_stat.attname not in partial_column_name_mapping:
+            partial_column_name_mapping[col_stat.attname] = set()
+        partial_column_name_mapping[col_stat.attname].add(col_stat.tablename)
+    
+    return column_id_mapping, partial_column_name_mapping
+
+
+def build_feature_statistics(train_plans_dict, train_plans):
+    """訓練プランからfeature_statisticsを生成"""
+    from training.preprocessing.feature_statistics import gather_values_recursively
+    from sklearn.preprocessing import RobustScaler
+    
+    values = gather_values_recursively(train_plans_dict)
+    feature_statistics = {}
+    
+    for k, vals in values.items():
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            continue
+        
+        if all([isinstance(v, (int, float)) or v is None for v in vals]):
+            scaler = RobustScaler()
+            np_vals = np.array(vals, dtype=np.float64).reshape(-1, 1)
+            np_vals = np_vals[np.isfinite(np_vals)].reshape(-1, 1)
+            if np_vals.size == 0:
+                feature_statistics[k] = dict(max=0.0, scale=1.0, center=0.0, type='numeric')
+            else:
+                scaler.fit(np_vals)
+                feature_statistics[k] = dict(
+                    max=float(np_vals.max()),
+                    scale=float(scaler.scale_.item()),
+                    center=float(scaler.center_.item()),
+                    type='numeric'
+                )
+        else:
+            unique_values = set(vals)
+            feature_statistics[k] = dict(
+                value_dict={v: id for id, v in enumerate(unique_values)},
+                no_vals=len(unique_values),
+                type='categorical'
+            )
+    
+    # feature_statisticsの互換性チェック
+    if 'column' in feature_statistics and 'max' not in feature_statistics['column']:
+        feature_statistics['column']['max'] = feature_statistics['column']['no_vals'] - 1
+    if 'columns' not in feature_statistics:
+        feature_statistics['columns'] = feature_statistics.get('column', {'max': 0})
+    if 'tablename' not in feature_statistics:
+        feature_statistics['tablename'] = {'value_dict': {}, 'no_vals': 0, 'type': 'categorical'}
+    
+    # 'table'キーを確実に正しい形式で作成
+    if 'tablename' in feature_statistics and 'no_vals' in feature_statistics['tablename']:
+        feature_statistics['table'] = {'max': max(0, feature_statistics['tablename']['no_vals'] - 1)}
+    elif 'table' not in feature_statistics:
+        feature_statistics['table'] = {'max': 0}
+    elif 'table' in feature_statistics and feature_statistics['table'].get('type') == 'numeric':
+        if 'tablename' in feature_statistics and 'no_vals' in feature_statistics['tablename']:
+            feature_statistics['table'] = {'max': max(0, feature_statistics['tablename']['no_vals'] - 1)}
+        else:
+            feature_statistics['table'] = {'max': 0}
+    
+    # join conds from training
+    join_conds_set = set()
+    for p in train_plans:
+        if hasattr(p, 'join_conds') and p.join_conds:
+            join_conds_set.update(p.join_conds)
+    feature_statistics['join_conds'] = {
+        'value_dict': {jc: idx for idx, jc in enumerate(join_conds_set)} if join_conds_set else {},
+        'no_vals': len(join_conds_set),
+        'type': 'categorical'
+    }
+    
+    return feature_statistics
+
+
+def create_test_loader(
+    test_plans,
+    feature_statistics,
+    column_statistics,
+    database_statistics,
+    label_norm,
+    batch_size,
+    max_num_filters,
+    histogram_bin_size
+):
+    """テストローダーを作成"""
+    from models.query_former.dataloader import encode_query_plan
+    from torch.utils.data import TensorDataset
+    
+    all_features = []
+    all_join_ids = []
+    all_attention_bias = []
+    all_rel_pos = []
+    all_node_heights = []
+    all_labels = []
+    
+    # カラムIDマッピングを作成
+    column_id_mapping, partial_column_name_mapping = build_column_id_mapping(database_statistics)
+    
+    # plan_parametersをSimpleNamespaceに変換
+    for tp in test_plans:
+        convert_to_namespace(tp, column_id_mapping, partial_column_name_mapping)
+    
+    # エンコード
+    for i, plan in enumerate(test_plans):
+        try:
+            if not hasattr(plan, 'join_conds'):
+                plan.join_conds = []
+            if not hasattr(plan, 'database_id'):
+                plan.database_id = 0
+            
+            features, join_ids, attention_bias, rel_pos, node_heights = encode_query_plan(
+                query_index=i,
+                query_plan=plan,
+                feature_statistics=feature_statistics,
+                column_statistics=column_statistics,
+                database_statistics=database_statistics,
+                word_embeddings=None,
+                dim_word_embedding=100,
+                dim_word_hash=100,
+                dim_bitmaps=1000,
+                max_filter_number=max_num_filters,
+                histogram_bin_size=histogram_bin_size
+            )
+            all_features.append(features)
+            all_join_ids.append(join_ids)
+            all_attention_bias.append(attention_bias)
+            all_rel_pos.append(rel_pos)
+            all_node_heights.append(node_heights)
+            label = plan.plan_runtime / 1000 if hasattr(plan, 'plan_runtime') else 1.0
+            all_labels.append(label)
+        except Exception as e:
+            print(f"  警告: テストプラン{i+1}のエンコードに失敗: {e}")
+            continue
+    
+    if not all_features:
+        raise ValueError("No test features encoded. Aborting.")
+    
+    features_tensor = torch.cat(all_features)
+    join_ids_tensor = torch.cat(all_join_ids)
+    attention_bias_tensor = torch.cat(all_attention_bias)
+    rel_pos_tensor = torch.cat(all_rel_pos)
+    node_heights_tensor = torch.cat(all_node_heights)
+    
+    # Test labelsを正規化
+    test_labels_array = np.array(all_labels).reshape(-1, 1)
+    if label_norm is not None:
+        normalized_test_labels = torch.tensor(
+            label_norm.transform(np.log1p(test_labels_array)).flatten(),
+            dtype=torch.float32
+        )
+    else:
+        normalized_test_labels = torch.tensor(all_labels, dtype=torch.float32)
+    
+    test_dataset_tensor = TensorDataset(
+        features_tensor,
+        join_ids_tensor,
+        attention_bias_tensor,
+        rel_pos_tensor,
+        node_heights_tensor,
+        normalized_test_labels.view(-1, 1)
+    )
+    test_loader = DataLoader(test_dataset_tensor, batch_size=batch_size, shuffle=False)
+    
+    return test_loader
+
+
+# ============================================================================
+# メイン関数
+# ============================================================================
+
 def parse_and_prepare_data(
     txt_file: Path,
     dataset: str,
@@ -193,99 +525,9 @@ def parse_and_prepare_data(
     # feature_statisticsを生成
     print("feature_statisticsを生成中...")
     
-    def plan_to_dict(node):
-        result = {}
-        if hasattr(node, 'plan_parameters'):
-            if hasattr(node.plan_parameters, '__dict__'):
-                result = vars(node.plan_parameters).copy()
-            elif isinstance(node.plan_parameters, dict):
-                result = node.plan_parameters.copy()
-        
-        # 'table'を'tablename'としても追加
-        if 'table' in result and 'tablename' not in result:
-            result['tablename'] = result['table']
-        
-        if hasattr(node, 'children') and node.children:
-            result['children'] = [plan_to_dict(c) for c in node.children]
-        
-        return result
-    
     plans_dict = [plan_to_dict(p) for p in parsed_plans]
     
-    from training.preprocessing.feature_statistics import gather_values_recursively
-    from sklearn.preprocessing import RobustScaler
-    
-    value_dict = gather_values_recursively(plans_dict)
-    
-    statistics_dict = dict()
-    for k, values in value_dict.items():
-        values = [v for v in values if v is not None]
-        if len(values) == 0:
-            continue
-        
-        if all([isinstance(v, (int, float)) or v is None for v in values]):
-            scaler = RobustScaler()
-            np_values = np.array(values, dtype=np.float32).reshape(-1, 1)
-            scaler.fit(np_values)
-            
-            statistics_dict[k] = dict(
-                max=float(np_values.max()),
-                scale=scaler.scale_.item(),
-                center=scaler.center_.item(),
-                type='numeric'
-            )
-        else:
-            unique_values = set(values)
-            statistics_dict[k] = dict(
-                value_dict={v: id for id, v in enumerate(unique_values)},
-                no_vals=len(unique_values),
-                type='categorical'
-            )
-    
-    feature_statistics = statistics_dict
-    
-    # 'tablename'がない場合は追加
-    if 'tablename' not in feature_statistics:
-        table_names = set()
-        for plan_dict in plans_dict:
-            if 'tablename' in plan_dict:
-                table_names.add(plan_dict['tablename'])
-            if 'table' in plan_dict:
-                table_names.add(plan_dict['table'])
-        
-        if table_names:
-            feature_statistics['tablename'] = {
-                'value_dict': {v: idx for idx, v in enumerate(table_names)},
-                'no_vals': len(table_names),
-                'type': 'categorical'
-            }
-    
-    # 'join_conds'を追加
-    join_conds_set = set()
-    for plan in parsed_plans:
-        if hasattr(plan, 'join_conds') and plan.join_conds:
-            join_conds_set.update(plan.join_conds)
-    
-    feature_statistics['join_conds'] = {
-        'value_dict': {jc: idx for idx, jc in enumerate(join_conds_set)} if join_conds_set else {},
-        'no_vals': len(join_conds_set),
-        'type': 'categorical'
-    }
-    
-    # 'column'に'max'を追加
-    if 'column' in feature_statistics and 'max' not in feature_statistics['column']:
-        feature_statistics['column']['max'] = feature_statistics['column']['no_vals'] - 1
-    
-    # 'columns'エイリアスを追加
-    if 'columns' not in feature_statistics:
-        feature_statistics['columns'] = feature_statistics.get('column', {'max': 0})
-    
-    # 'table'エイリアスを追加（PlanModelInputDims/extract_dimensions互換）
-    if 'table' not in feature_statistics:
-        if 'tablename' in feature_statistics and 'no_vals' in feature_statistics['tablename']:
-            feature_statistics['table'] = {'max': max(0, feature_statistics['tablename']['no_vals'] - 1)}
-        else:
-            feature_statistics['table'] = {'max': 0}
+    feature_statistics = build_feature_statistics(plans_dict, parsed_plans)
     
     print(f"✅ feature_statistics: {len(feature_statistics)} 特徴量")
     
@@ -349,6 +591,178 @@ def parse_and_prepare_data(
     os.chdir(original_cwd)
     
     return parsed_plans, feature_statistics, column_statistics, database_statistics
+
+
+def parse_all_datasets_once(
+    plans_dir: Path,
+    available_datasets: list,
+    no_samples: int = 1000
+):
+    """
+    Parse all datasets' .txt plans under plans_dir once.
+    This is more efficient than parsing for each leave-one-out iteration.
+
+    Returns: (all_plans_by_dataset, column_statistics, database_statistics)
+      - all_plans_by_dataset: dict {dataset_name: [list of plans]}
+      - column_statistics: combined column statistics dict
+      - database_statistics: SimpleNamespace with table_stats and column_stats
+    """
+    from cross_db_benchmark.benchmark_tools.trino.parse_plan import TrinoPlanParser
+    from models.workload_driven.preprocessing.sample_vectors_trino import get_table_samples_from_csv
+    
+    assert plans_dir.exists(), f"plans_dir not found: {plans_dir}"
+    txt_files = sorted([p for p in plans_dir.glob('*.txt')])
+    assert txt_files, f"No txt files found in {plans_dir}"
+
+    def infer_dataset_name(p: Path) -> str:
+        ALL_DATASETS = [
+            'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+            'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+            'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+            'tournament', 'tpc_h', 'walmart'
+        ]
+        stem = p.stem
+        parts = stem.split('_')
+        matched_dataset = None
+        for i in range(len(parts), 0, -1):
+            candidate = '_'.join(parts[:i])
+            if candidate in ALL_DATASETS:
+                matched_dataset = candidate
+                break
+        if matched_dataset:
+            return matched_dataset
+        return stem.split('_')[0]
+
+    dataset_to_files = {}
+    for p in txt_files:
+        ds = infer_dataset_name(p)
+        if ds in available_datasets:
+            dataset_to_files.setdefault(ds, []).append(p)
+
+    parser = TrinoPlanParser()
+
+    # Global column stats and mappings
+    global_column_stats_list = []
+    global_column_id = {}
+    combined_column_statistics = {}
+    combined_table_stats = []
+    
+    def load_stats_and_prepare_ids(dataset: str):
+        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
+        zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
+        if not zero_shot_col_stats_path.exists():
+            zero_shot_column_stats = {}
+            table_stats_dict = {}
+        else:
+            with open(zero_shot_col_stats_path) as f:
+                zero_shot_column_stats = json.load(f)
+            
+            stats_dir = Path('src').parent / 'datasets_statistics' / f'iceberg_{dataset}'
+            if stats_dir.exists():
+                with open(stats_dir / 'table_stats.json') as f:
+                    table_stats_dict = json.load(f)
+            else:
+                table_stats_dict = {}
+        
+        for table_name, tstats in table_stats_dict.items():
+            combined_table_stats.append(SimpleNamespace(
+                relname=f"{dataset}.{table_name}",
+                reltuples=tstats.get('reltuples', tstats.get('row_count', 0)),
+                relpages=tstats.get('relpages', 0)
+            ))
+        
+        column_id_mapping_ds = {}
+        partial_column_name_mapping_ds = {}
+        for table_name, table_cols in zero_shot_column_stats.items():
+            for col_name, col_stats in table_cols.items():
+                key = (dataset, table_name, col_name)
+                if key not in global_column_id:
+                    gid = len(global_column_stats_list)
+                    global_column_id[key] = gid
+                    global_column_stats_list.append(SimpleNamespace(
+                        tablename=f"{dataset}.{table_name}",
+                        attname=col_name,
+                        attnum=gid,
+                        null_frac=col_stats.get('nan_ratio', 0.0),
+                        avg_width=0,
+                        n_distinct=col_stats.get('num_unique', -1),
+                        correlation=0
+                    ))
+                column_id_mapping_ds[(table_name, col_name)] = global_column_id[key]
+                partial_column_name_mapping_ds.setdefault(col_name, set()).add(table_name)
+        
+        for table_name, table_cols in zero_shot_column_stats.items():
+            pref_t = f"{dataset}.{table_name}"
+            for col_name, col_stats in table_cols.items():
+                combined_column_statistics.setdefault(pref_t, {})[col_name] = {
+                    'datatype': col_stats.get('datatype', 'misc'),
+                    'min': col_stats.get('min'),
+                    'max': col_stats.get('max'),
+                    'percentiles': col_stats.get('percentiles'),
+                    'num_unique': col_stats.get('num_unique', -1),
+                    'null_frac': col_stats.get('nan_ratio', 0.0)
+                }
+        
+        return {}, table_stats_dict, column_id_mapping_ds, partial_column_name_mapping_ds
+    
+    def parse_plans_for_dataset(dataset: str, files: list):
+        column_stats_dict, table_stats_dict, column_id_mapping_ds, partial_col_map_ds = load_stats_and_prepare_ids(dataset)
+        
+        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
+        zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
+        zero_shot_column_stats = {}
+        if zero_shot_col_stats_path.exists():
+            with open(zero_shot_col_stats_path) as f:
+                zero_shot_column_stats = json.load(f)
+        
+        table_samples = None
+        col_stats_ns = []
+        try:
+            table_samples = get_table_samples_from_csv(dataset, data_dir=None, no_samples=no_samples)
+            for table_name, table_cols in zero_shot_column_stats.items():
+                for col_name in table_cols.keys():
+                    col_stats_ns.append(SimpleNamespace(
+                        tablename=table_name,
+                        attname=col_name,
+                        attnum=len(col_stats_ns)
+                    ))
+        except Exception:
+            table_samples = None
+            col_stats_ns = []
+        
+        parsed = []
+        for f in files:
+            p_plans, runtimes = parser.parse_explain_analyze_file(
+                str(f),
+                min_runtime=0,
+                max_runtime=float('inf'),
+                table_samples=table_samples,
+                col_stats=col_stats_ns,
+                column_id_mapping=column_id_mapping_ds,
+                partial_column_name_mapping=partial_col_map_ds,
+                table_id_mapping={}
+            )
+            for p in p_plans:
+                setattr(p, 'database_id', 0)
+                setattr(p, 'dataset', dataset)
+            parsed.extend(p_plans)
+        return parsed
+    
+    all_plans_by_dataset = {}
+    for ds in available_datasets:
+        if ds in dataset_to_files:
+            files = dataset_to_files[ds]
+            print(f"  読み込み中: {ds} ({len(files)} ファイル)...")
+            all_plans_by_dataset[ds] = parse_plans_for_dataset(ds, files)
+            print(f"    ✅ {ds}: {len(all_plans_by_dataset[ds])} プラン")
+    
+    database_statistics = SimpleNamespace(
+        table_stats=combined_table_stats,
+        column_stats=global_column_stats_list,
+        database_type='trino'
+    )
+    
+    return all_plans_by_dataset, combined_column_statistics, database_statistics
 
 
 def parse_and_prepare_leave_one_out(
@@ -536,68 +950,8 @@ def parse_and_prepare_leave_one_out(
     test_plans.extend(parse_plans_for_dataset(test_dataset, test_files))
     
     # Build feature_statistics from training plans only
-    def plan_to_dict(node):
-        result = {}
-        if hasattr(node, 'plan_parameters'):
-            if hasattr(node.plan_parameters, '__dict__'):
-                result = vars(node.plan_parameters).copy()
-            elif isinstance(node.plan_parameters, dict):
-                result = node.plan_parameters.copy()
-        # add tablename alias
-        if 'table' in result and 'tablename' not in result:
-            result['tablename'] = result['table']
-        if hasattr(node, 'children') and node.children:
-            result['children'] = [plan_to_dict(c) for c in node.children]
-        return result
-    
     train_plans_dict = [plan_to_dict(p) for p in train_plans]
-    from training.preprocessing.feature_statistics import gather_values_recursively
-    from sklearn.preprocessing import RobustScaler
-    values = gather_values_recursively(train_plans_dict)
-    feature_statistics = {}
-    for k, vals in values.items():
-        vals = [v for v in vals if v is not None]
-        if not vals:
-            continue
-        if all([isinstance(v, (int, float)) or v is None for v in vals]):
-            scaler = RobustScaler()
-            np_vals = np.array(vals, dtype=np.float64).reshape(-1, 1)
-            np_vals = np_vals[np.isfinite(np_vals)].reshape(-1, 1)
-            if np_vals.size == 0:
-                feature_statistics[k] = dict(max=0.0, scale=1.0, center=0.0, type='numeric')
-            else:
-                scaler.fit(np_vals)
-                feature_statistics[k] = dict(
-                    max=float(np_vals.max()),
-                    scale=float(scaler.scale_.item()),
-                    center=float(scaler.center_.item()),
-                    type='numeric'
-                )
-        else:
-            unique_values = set(vals)
-            feature_statistics[k] = dict(
-                value_dict={v: id for id, v in enumerate(unique_values)},
-                no_vals=len(unique_values),
-                type='categorical'
-            )
-    if 'column' in feature_statistics and 'max' not in feature_statistics['column']:
-        feature_statistics['column']['max'] = feature_statistics['column']['no_vals'] - 1
-    if 'columns' not in feature_statistics:
-        feature_statistics['columns'] = feature_statistics.get('column', {'max': 0})
-    if 'tablename' not in feature_statistics:
-        feature_statistics['tablename'] = {'value_dict': {}, 'no_vals': 0, 'type': 'categorical'}
-    if 'table' not in feature_statistics:
-        feature_statistics['table'] = {'max': max(0, feature_statistics.get('tablename', {}).get('no_vals', 1) - 1)}
-    # join conds from training
-    join_conds_set = set()
-    for p in train_plans:
-        if hasattr(p, 'join_conds') and p.join_conds:
-            join_conds_set.update(p.join_conds)
-    feature_statistics['join_conds'] = {
-        'value_dict': {jc: idx for idx, jc in enumerate(join_conds_set)} if join_conds_set else {},
-        'no_vals': len(join_conds_set),
-        'type': 'categorical'
-    }
+    feature_statistics = build_feature_statistics(train_plans_dict, train_plans)
     
     # Build combined database_statistics
     database_statistics = SimpleNamespace(
@@ -645,132 +999,14 @@ def create_simple_dataloader(
     
     # カラムIDマッピングを作成
     print("カラムIDマッピングを作成中...")
-    column_id_mapping = {}
-    partial_column_name_mapping = {}
-    
-    for i, col_stat in enumerate(database_statistics.column_stats):
-        key = (col_stat.tablename, col_stat.attname)
-        column_id_mapping[key] = i
-        
-        if col_stat.attname not in partial_column_name_mapping:
-            partial_column_name_mapping[col_stat.attname] = set()
-        partial_column_name_mapping[col_stat.attname].add(col_stat.tablename)
+    column_id_mapping, partial_column_name_mapping = build_column_id_mapping(database_statistics)
     
     print(f"✅ カラムIDマッピング: {len(column_id_mapping)} カラム")
     
-    # filter_columnsのcolumnをカラムIDに変換し、literalを実値に変換
-    def convert_filter_node(filter_node):
-        """filter_columns（SimpleNamespace形式）のcolumnとliteralを変換"""
-        if not hasattr(filter_node, 'column'):
-            return
-        
-        # columnの変換（Noneは維持）
-        column = filter_node.column
-        if column is not None and isinstance(column, (tuple, list)):
-            if len(column) == 1:
-                col_name = str(column[0]).strip('"')
-                # Trinoエイリアス（_数字）を削除
-                import re
-                col_name_without_suffix = re.sub(r'_\d+$', '', col_name)
-                
-                # テーブル名を推測してカラムIDを取得
-                for table_name in partial_column_name_mapping.get(col_name, set()):
-                    if (table_name, col_name) in column_id_mapping:
-                        filter_node.column = column_id_mapping[(table_name, col_name)]
-                        break
-                else:
-                    # サフィックス削除版で再試行
-                    for table_name in partial_column_name_mapping.get(col_name_without_suffix, set()):
-                        if (table_name, col_name_without_suffix) in column_id_mapping:
-                            filter_node.column = column_id_mapping[(table_name, col_name_without_suffix)]
-                            break
-                    else:
-                        # 変換できない場合はNoneに設定
-                        filter_node.column = None
-            elif len(column) == 2:
-                table_name, col_name = column
-                table_name = str(table_name).strip('"')
-                col_name = str(col_name).strip('"')
-                if (table_name, col_name) in column_id_mapping:
-                    filter_node.column = column_id_mapping[(table_name, col_name)]
-                else:
-                    filter_node.column = None
-        
-        # literalの変換（リスト形式とシンプル形式の両方に対応）
-        literal = filter_node.literal
-        if literal is not None:
-            if isinstance(literal, list):
-                # IN句のリスト形式
-                converted_list = []
-                for item in literal:
-                    if isinstance(item, str) and "'" in item:
-                        parts = item.split("'")
-                        if len(parts) >= 2:
-                            item_value = parts[1]
-                            try:
-                                if '.' in item_value:
-                                    converted_list.append(float(item_value))
-                                else:
-                                    converted_list.append(int(item_value))
-                            except (ValueError, TypeError):
-                                converted_list.append(item_value)
-                        else:
-                            converted_list.append(item)
-                    else:
-                        converted_list.append(item)
-                filter_node.literal = converted_list
-            elif isinstance(literal, str) and "'" in literal:
-                # varchar 'B' -> 'B', bigint '343' -> 343
-                parts = literal.split("'")
-                if len(parts) >= 2:
-                    literal_value = parts[1]
-                    try:
-                        if '.' in literal_value:
-                            filter_node.literal = float(literal_value)
-                        else:
-                            filter_node.literal = int(literal_value)
-                    except (ValueError, TypeError):
-                        filter_node.literal = literal_value
-        
-        # 子ノードを再帰的に変換
-        if hasattr(filter_node, 'children') and filter_node.children:
-            for child in filter_node.children:
-                convert_filter_node(child)
-    
-    # plan_parametersをSimpleNamespaceに変換し、filter_columnsも変換
-    def dict_to_namespace_recursive(d):
-        """辞書を再帰的にSimpleNamespaceに変換"""
-        if isinstance(d, dict):
-            ns = SimpleNamespace()
-            for k, v in d.items():
-                if isinstance(v, dict):
-                    setattr(ns, k, dict_to_namespace_recursive(v))
-                elif isinstance(v, list):
-                    setattr(ns, k, [dict_to_namespace_recursive(item) if isinstance(item, dict) else item for item in v])
-                else:
-                    setattr(ns, k, v)
-            return ns
-        return d
-    
-    def convert_to_namespace(node):
-        """辞書形式のplan_parametersとfilter_columnsをSimpleNamespaceに変換"""
-        if hasattr(node, 'plan_parameters'):
-            if isinstance(node.plan_parameters, dict):
-                # 辞書をSimpleNamespaceに変換
-                node.plan_parameters = dict_to_namespace_recursive(node.plan_parameters)
-            
-            # filter_columnsのcolumnとliteralを変換
-            if hasattr(node.plan_parameters, 'filter_columns') and node.plan_parameters.filter_columns:
-                convert_filter_node(node.plan_parameters.filter_columns)
-        
-        # 子ノードを再帰的に変換
-        if hasattr(node, 'children') and node.children:
-            for child in node.children:
-                convert_to_namespace(child)
-    
+    # plan_parametersをSimpleNamespaceに変換
     print("plan_parametersをSimpleNamespaceに変換中...")
     for plan in plans:
-        convert_to_namespace(plan)
+        convert_to_namespace(plan, column_id_mapping, partial_column_name_mapping)
     
     print(f"✅ plan_parametersとfilter_columnsを変換完了")
     print()
@@ -823,6 +1059,10 @@ def create_simple_dataloader(
     
     print(f"✅ {len(all_features)} プランをエンコード完了")
     print()
+    
+    # エンコードされたプランがない場合はエラー
+    if len(all_features) == 0:
+        raise ValueError("すべてのプランのエンコードに失敗しました。データの確認が必要です。")
     
     # データセット分割
     n_samples = len(all_features)
@@ -900,6 +1140,24 @@ def train_queryformer_trino(
     print("ステップ3: モデルの初期化とトレーニング")
     print("=" * 80)
     print()
+    
+    # feature_statisticsの互換性チェック（PlanModelInputDims/extract_dimensions用）
+    if 'table' not in feature_statistics:
+        # tablenameからtableを推測
+        if 'tablename' in feature_statistics and 'no_vals' in feature_statistics['tablename']:
+            feature_statistics['table'] = {'max': max(0, feature_statistics['tablename']['no_vals'] - 1)}
+        else:
+            feature_statistics['table'] = {'max': 0}
+    elif 'max' not in feature_statistics['table']:
+        # tableキーは存在するがmaxキーがない場合
+        if 'tablename' in feature_statistics and 'no_vals' in feature_statistics['tablename']:
+            feature_statistics['table']['max'] = max(0, feature_statistics['tablename']['no_vals'] - 1)
+        else:
+            feature_statistics['table']['max'] = 0
+    
+    # columnsエイリアスの確認
+    if 'columns' not in feature_statistics:
+        feature_statistics['columns'] = feature_statistics.get('column', {'max': 0})
     
     # モデル設定
     # Only pass allowed fields to the model config
@@ -1106,9 +1364,7 @@ def train_queryformer_trino(
         all_test_preds = np.concatenate(all_test_preds)
         all_test_labels = np.concatenate(all_test_labels)
         
-        # メトリクス計算
-        from training.training.metrics import RMSE, QError
-        
+        # メトリクス計算（RMSE, QErrorは既にグローバルimport済み）
         # Q-Error計算（0以下の値をクリップ）
         min_val = 0.1
         all_test_preds_clipped = np.clip(all_test_preds, min_val, np.inf)
@@ -1191,8 +1447,10 @@ def run(args) -> int:
     print(f"\n{'='*80}")
     print(f"Trino QueryFormer {args.mode.upper()}")
     print(f"{'='*80}")
-    print(f"データセット: {args.dataset}")
-    print(f"入力ファイル: {txt_file}")
+    # train_multi_allモードではデータセット情報は後で表示されるため、ここでは表示しない
+    if args.mode != 'train_multi_all':
+        print(f"データセット: {args.dataset}")
+        print(f"入力ファイル: {txt_file}")
     print(f"出力ディレクトリ: {output_dir}")
     print(f"デバイス: {args.device}")
     print(f"{'='*80}\n")
@@ -1292,166 +1550,16 @@ def run(args) -> int:
         print()
         
         # Build test loader separately (use same feature_statistics)
-        # Reuse function by treating test plans as entire dataset and no split
-        from models.query_former.dataloader import encode_query_plan
-        all_features = []
-        all_join_ids = []
-        all_attention_bias = []
-        all_rel_pos = []
-        all_node_heights = []
-        all_labels = []
-        # Reuse conversion utilities from single-dataset path
-        column_id_mapping = {}
-        partial_column_name_mapping = {}
-        for i, col_stat in enumerate(database_statistics.column_stats):
-            key = (col_stat.tablename, col_stat.attname)
-            column_id_mapping[key] = i
-            cname = col_stat.attname
-            tname = col_stat.tablename
-            partial_column_name_mapping.setdefault(cname, set()).add(tname)
-        def dict_to_namespace_recursive(d):
-            if isinstance(d, dict):
-                ns = SimpleNamespace()
-                for k, v in d.items():
-                    if isinstance(v, dict):
-                        setattr(ns, k, dict_to_namespace_recursive(v))
-                    elif isinstance(v, list):
-                        setattr(ns, k, [dict_to_namespace_recursive(item) if isinstance(item, dict) else item for item in v])
-                    else:
-                        setattr(ns, k, v)
-                return ns
-            return d
-        def convert_filter_node(filter_node):
-            if not hasattr(filter_node, 'column'):
-                return
-            column = filter_node.column
-            if column is not None and isinstance(column, (tuple, list)):
-                if len(column) == 1:
-                    col_name = str(column[0]).strip('"')
-                    import re
-                    col_name_without_suffix = re.sub(r'_\d+$', '', col_name)
-                    mapped = None
-                    for tname in partial_column_name_mapping.get(col_name, set()):
-                        key = (tname, col_name)
-                        if key in column_id_mapping:
-                            mapped = column_id_mapping[key]
-                            break
-                    if mapped is None:
-                        for tname in partial_column_name_mapping.get(col_name_without_suffix, set()):
-                            key = (tname, col_name_without_suffix)
-                            if key in column_id_mapping:
-                                mapped = column_id_mapping[key]
-                                break
-                    filter_node.column = mapped
-                elif len(column) == 2:
-                    table_name, col_name = column
-                    table_name = str(table_name).strip('"')
-                    col_name = str(col_name).strip('"')
-                    key = (table_name, col_name)
-                    filter_node.column = column_id_mapping.get(key)
-            literal = filter_node.literal
-            if literal is not None:
-                if isinstance(literal, list):
-                    converted_list = []
-                    for item in literal:
-                        if isinstance(item, str) and "'" in item:
-                            parts = item.split("'")
-                            if len(parts) >= 2:
-                                item_value = parts[1]
-                                try:
-                                    if '.' in item_value:
-                                        converted_list.append(float(item_value))
-                                    else:
-                                        converted_list.append(int(item_value))
-                                except (ValueError, TypeError):
-                                    converted_list.append(item_value)
-                            else:
-                                converted_list.append(item)
-                        else:
-                            converted_list.append(item)
-                    filter_node.literal = converted_list
-                elif isinstance(literal, str) and "'" in literal:
-                    parts = literal.split("'")
-                    if len(parts) >= 2:
-                        literal_value = parts[1]
-                        try:
-                            if '.' in literal_value:
-                                filter_node.literal = float(literal_value)
-                            else:
-                                filter_node.literal = int(literal_value)
-                        except (ValueError, TypeError):
-                            filter_node.literal = literal_value
-            if hasattr(filter_node, 'children') and filter_node.children:
-                for child in filter_node.children:
-                    convert_filter_node(child)
-        def convert_to_namespace(node):
-            if hasattr(node, 'plan_parameters'):
-                if isinstance(node.plan_parameters, dict):
-                    node.plan_parameters = dict_to_namespace_recursive(node.plan_parameters)
-                if hasattr(node.plan_parameters, 'filter_columns') and node.plan_parameters.filter_columns:
-                    convert_filter_node(node.plan_parameters.filter_columns)
-            if hasattr(node, 'children') and node.children:
-                for child in node.children:
-                    convert_to_namespace(child)
-        for tp in test_plans:
-            convert_to_namespace(tp)
-        for i, plan in enumerate(test_plans):
-            try:
-                if not hasattr(plan, 'join_conds'):
-                    plan.join_conds = []
-                if not hasattr(plan, 'database_id'):
-                    plan.database_id = 0
-                features, join_ids, attention_bias, rel_pos, node_heights = encode_query_plan(
-                    query_index=i,
-                    query_plan=plan,
-                    feature_statistics=feature_statistics,
-                    column_statistics=column_statistics,
-                    database_statistics=database_statistics,
-                    word_embeddings=None,
-                    dim_word_embedding=100,
-                    dim_word_hash=100,
-                    dim_bitmaps=1000,
-                    max_filter_number=args.max_num_filters,
-                    histogram_bin_size=args.histogram_bin_number
-                )
-                all_features.append(features)
-                all_join_ids.append(join_ids)
-                all_attention_bias.append(attention_bias)
-                all_rel_pos.append(rel_pos)
-                all_node_heights.append(node_heights)
-                label = plan.plan_runtime / 1000 if hasattr(plan, 'plan_runtime') else 1.0
-                all_labels.append(label)
-            except Exception as e:
-                print(f"  警告: テストプラン{i+1}のエンコードに失敗: {e}")
-                continue
-        assert all_features, "No test features encoded. Aborting."
-        features_tensor = torch.cat(all_features)
-        join_ids_tensor = torch.cat(all_join_ids)
-        attention_bias_tensor = torch.cat(all_attention_bias)
-        rel_pos_tensor = torch.cat(all_rel_pos)
-        node_heights_tensor = torch.cat(all_node_heights)
-        # Test labelsも同じlabel_normで正規化する必要がある
-        # label_normは訓練データから作成されているため、それをテストデータにも適用
-        test_labels_array = np.array(all_labels).reshape(-1, 1)
-        if label_norm is not None:
-            normalized_test_labels = torch.tensor(
-                label_norm.transform(np.log1p(test_labels_array)).flatten(),
-                dtype=torch.float32
-            )
-        else:
-            # label_normがない場合はそのまま使用
-            normalized_test_labels = torch.tensor(all_labels, dtype=torch.float32)
-        
-        from torch.utils.data import TensorDataset
-        test_dataset_tensor = TensorDataset(
-            features_tensor, 
-            join_ids_tensor, 
-            attention_bias_tensor, 
-            rel_pos_tensor, 
-            node_heights_tensor, 
-            normalized_test_labels.view(-1, 1)  # 正規化されたラベルを使用
+        test_loader = create_test_loader(
+            test_plans=test_plans,
+            feature_statistics=feature_statistics,
+            column_statistics=column_statistics,
+            database_statistics=database_statistics,
+            label_norm=label_norm,
+            batch_size=args.batch_size,
+            max_num_filters=args.max_num_filters,
+            histogram_bin_size=args.histogram_bin_number
         )
-        test_loader = DataLoader(test_dataset_tensor, batch_size=args.batch_size, shuffle=False)
         
         print(f"✅ テストデータセット（{args.test_dataset}）から作成:")
         print(f"  - Test loader: {len(test_loader.dataset)} サンプル")
@@ -1523,6 +1631,24 @@ def run(args) -> int:
         print(f"出力ディレクトリ: {output_dir}")
         print(f"{'='*80}\n")
         
+        # 最初に1回だけ全データセットのプランを読み込む
+        print("=" * 80)
+        print("ステップ0: 全データセットのプランを読み込み中...")
+        print("=" * 80)
+        print()
+        
+        all_plans_by_dataset, all_column_statistics, all_database_statistics = parse_all_datasets_once(
+            plans_dir=plans_dir,
+            available_datasets=available_datasets,
+            no_samples=args.no_samples
+        )
+        
+        print(f"✅ 全データセットの読み込み完了")
+        print(f"  - 読み込んだデータセット: {len(all_plans_by_dataset)}")
+        for ds, plans in all_plans_by_dataset.items():
+            print(f"    - {ds}: {len(plans)} プラン")
+        print()
+        
         # 各データセットについて訓練・テストを実行
         results_summary = []
         
@@ -1532,13 +1658,21 @@ def run(args) -> int:
             print(f"{'#'*80}\n")
             
             try:
-                # データを準備
-                train_plans, test_plans, feature_statistics, column_statistics, database_statistics = \
-                    parse_and_prepare_leave_one_out(
-                        plans_dir=plans_dir,
-                        test_dataset=test_dataset,
-                        no_samples=args.no_samples
-                    )
+                # 既に読み込んだプランからtrain/testを分割
+                train_plans = []
+                test_plans = all_plans_by_dataset[test_dataset]
+                
+                for ds, plans in all_plans_by_dataset.items():
+                    if ds != test_dataset:
+                        train_plans.extend(plans)
+                
+                # feature_statisticsを訓練データから生成
+                train_plans_dict = [plan_to_dict(p) for p in train_plans]
+                feature_statistics = build_feature_statistics(train_plans_dict, train_plans)
+                
+                # column_statisticsとdatabase_statisticsは既に読み込まれている
+                column_statistics = all_column_statistics
+                database_statistics = all_database_statistics
                 
                 # データセット数の計算
                 train_datasets_set = set()
@@ -1573,171 +1707,16 @@ def run(args) -> int:
                 print()
                 
                 # テストローダーを作成（train_multiと同じロジック）
-                from models.query_former.dataloader import encode_query_plan
-                all_features = []
-                all_join_ids = []
-                all_attention_bias = []
-                all_rel_pos = []
-                all_node_heights = []
-                all_labels = []
-                
-                # カラムIDマッピングを作成
-                column_id_mapping = {}
-                partial_column_name_mapping = {}
-                for i, col_stat in enumerate(database_statistics.column_stats):
-                    key = (col_stat.tablename, col_stat.attname)
-                    column_id_mapping[key] = i
-                    cname = col_stat.attname
-                    tname = col_stat.tablename
-                    partial_column_name_mapping.setdefault(cname, set()).add(tname)
-                
-                def dict_to_namespace_recursive(d):
-                    if isinstance(d, dict):
-                        ns = SimpleNamespace()
-                        for k, v in d.items():
-                            if isinstance(v, dict):
-                                setattr(ns, k, dict_to_namespace_recursive(v))
-                            elif isinstance(v, list):
-                                setattr(ns, k, [dict_to_namespace_recursive(item) if isinstance(item, dict) else item for item in v])
-                            else:
-                                setattr(ns, k, v)
-                        return ns
-                    return d
-                
-                def convert_filter_node(filter_node):
-                    if not hasattr(filter_node, 'column'):
-                        return
-                    column = filter_node.column
-                    if column is not None and isinstance(column, (tuple, list)):
-                        if len(column) == 1:
-                            col_name = str(column[0]).strip('"')
-                            import re
-                            col_name_without_suffix = re.sub(r'_\d+$', '', col_name)
-                            mapped = None
-                            for tname in partial_column_name_mapping.get(col_name, set()):
-                                key = (tname, col_name)
-                                if key in column_id_mapping:
-                                    mapped = column_id_mapping[key]
-                                    break
-                            if mapped is None:
-                                for tname in partial_column_name_mapping.get(col_name_without_suffix, set()):
-                                    key = (tname, col_name_without_suffix)
-                                    if key in column_id_mapping:
-                                        mapped = column_id_mapping[key]
-                                        break
-                            filter_node.column = mapped
-                        elif len(column) == 2:
-                            table_name, col_name = column
-                            table_name = str(table_name).strip('"')
-                            col_name = str(col_name).strip('"')
-                            key = (table_name, col_name)
-                            filter_node.column = column_id_mapping.get(key)
-                    literal = filter_node.literal
-                    if literal is not None:
-                        if isinstance(literal, list):
-                            converted_list = []
-                            for item in literal:
-                                if isinstance(item, str) and "'" in item:
-                                    parts = item.split("'")
-                                    if len(parts) >= 2:
-                                        item_value = parts[1]
-                                        try:
-                                            if '.' in item_value:
-                                                converted_list.append(float(item_value))
-                                            else:
-                                                converted_list.append(int(item_value))
-                                        except (ValueError, TypeError):
-                                            converted_list.append(item_value)
-                                    else:
-                                        converted_list.append(item)
-                                else:
-                                    converted_list.append(item)
-                            filter_node.literal = converted_list
-                        elif isinstance(literal, str) and "'" in literal:
-                            parts = literal.split("'")
-                            if len(parts) >= 2:
-                                literal_value = parts[1]
-                                try:
-                                    if '.' in literal_value:
-                                        filter_node.literal = float(literal_value)
-                                    else:
-                                        filter_node.literal = int(literal_value)
-                                except (ValueError, TypeError):
-                                    filter_node.literal = literal_value
-                    if hasattr(filter_node, 'children') and filter_node.children:
-                        for child in filter_node.children:
-                            convert_filter_node(child)
-                
-                def convert_to_namespace(node):
-                    if hasattr(node, 'plan_parameters'):
-                        if isinstance(node.plan_parameters, dict):
-                            node.plan_parameters = dict_to_namespace_recursive(node.plan_parameters)
-                        if hasattr(node.plan_parameters, 'filter_columns') and node.plan_parameters.filter_columns:
-                            convert_filter_node(node.plan_parameters.filter_columns)
-                    if hasattr(node, 'children') and node.children:
-                        for child in node.children:
-                            convert_to_namespace(child)
-                
-                for tp in test_plans:
-                    convert_to_namespace(tp)
-                
-                for i, plan in enumerate(test_plans):
-                    try:
-                        if not hasattr(plan, 'join_conds'):
-                            plan.join_conds = []
-                        if not hasattr(plan, 'database_id'):
-                            plan.database_id = 0
-                        features, join_ids, attention_bias, rel_pos, node_heights = encode_query_plan(
-                            query_index=i,
-                            query_plan=plan,
-                            feature_statistics=feature_statistics,
-                            column_statistics=column_statistics,
-                            database_statistics=database_statistics,
-                            word_embeddings=None,
-                            dim_word_embedding=100,
-                            dim_word_hash=100,
-                            dim_bitmaps=1000,
-                            max_filter_number=args.max_num_filters,
-                            histogram_bin_size=args.histogram_bin_number
-                        )
-                        all_features.append(features)
-                        all_join_ids.append(join_ids)
-                        all_attention_bias.append(attention_bias)
-                        all_rel_pos.append(rel_pos)
-                        all_node_heights.append(node_heights)
-                        label = plan.plan_runtime / 1000 if hasattr(plan, 'plan_runtime') else 1.0
-                        all_labels.append(label)
-                    except Exception as e:
-                        print(f"  警告: テストプラン{i+1}のエンコードに失敗: {e}")
-                        continue
-                
-                assert all_features, f"No test features encoded for {test_dataset}. Aborting."
-                features_tensor = torch.cat(all_features)
-                join_ids_tensor = torch.cat(all_join_ids)
-                attention_bias_tensor = torch.cat(all_attention_bias)
-                rel_pos_tensor = torch.cat(all_rel_pos)
-                node_heights_tensor = torch.cat(all_node_heights)
-                
-                # Test labelsを正規化
-                test_labels_array = np.array(all_labels).reshape(-1, 1)
-                if label_norm is not None:
-                    normalized_test_labels = torch.tensor(
-                        label_norm.transform(np.log1p(test_labels_array)).flatten(),
-                        dtype=torch.float32
-                    )
-                else:
-                    normalized_test_labels = torch.tensor(all_labels, dtype=torch.float32)
-                
-                from torch.utils.data import TensorDataset
-                test_dataset_tensor = TensorDataset(
-                    features_tensor, 
-                    join_ids_tensor, 
-                    attention_bias_tensor, 
-                    rel_pos_tensor, 
-                    node_heights_tensor, 
-                    normalized_test_labels.view(-1, 1)
+                test_loader = create_test_loader(
+                    test_plans=test_plans,
+                    feature_statistics=feature_statistics,
+                    column_statistics=column_statistics,
+                    database_statistics=database_statistics,
+                    label_norm=label_norm,
+                    batch_size=args.batch_size,
+                    max_num_filters=args.max_num_filters,
+                    histogram_bin_size=args.histogram_bin_number
                 )
-                test_loader = DataLoader(test_dataset_tensor, batch_size=args.batch_size, shuffle=False)
                 
                 print(f"✅ テストデータセット（{test_dataset}）から作成:")
                 print(f"  - Test loader: {len(test_loader.dataset)} サンプル")

@@ -647,6 +647,77 @@ def run(args) -> int:
     return 0
 
 
+def load_all_datasets_once_for_dace(plans_dir: Path, available_datasets: list, max_plans_per_file=None):
+    """
+    Parse all datasets' .txt plans under plans_dir once for DACE.
+    This is more efficient than parsing for each leave-one-out iteration.
+    
+    Returns: (all_datasets_info, preloaded_plans)
+      - all_datasets_info: dict {dataset_name: {files: [list of files]}}
+      - preloaded_plans: dict {file_path: [list of plans]}
+    """
+    from models.dace.dace_dataset_trino import read_workload_run
+    
+    def infer_dataset_name(p: Path, ALL_DATASETS: list) -> str:
+        stem = p.stem
+        parts = stem.split('_')
+        matched_dataset = None
+        for i in range(len(parts), 0, -1):
+            candidate = '_'.join(parts[:i])
+            if candidate in ALL_DATASETS:
+                matched_dataset = candidate
+                break
+        if matched_dataset:
+            return matched_dataset
+        return stem.split('_')[0]
+    
+    ALL_DATASETS = [
+        'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+        'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+        'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+        'tournament', 'tpc_h', 'walmart'
+    ]
+    
+    txt_files = sorted([p for p in plans_dir.glob('*.txt')])
+    dataset_to_files = {}
+    for p in txt_files:
+        ds = infer_dataset_name(p, ALL_DATASETS)
+        if ds in available_datasets:
+            dataset_to_files.setdefault(ds, []).append(p)
+    
+    all_datasets_info = {}
+    preloaded_plans = {}  # {file_path: [plans]}
+    
+    print("=" * 80)
+    print("ステップ0: 全データセットのプランを読み込み中...")
+    print("=" * 80)
+    print()
+    
+    for ds in available_datasets:
+        if ds in dataset_to_files:
+            files = dataset_to_files[ds]
+            all_datasets_info[ds] = {'files': files}
+            print(f"  読み込み中: {ds} ({len(files)} ファイル)...")
+            
+            # 各ファイルからプランを読み込む
+            for file_path in files:
+                try:
+                    plans = read_workload_run(file_path)
+                    preloaded_plans[file_path] = plans
+                    print(f"    ✅ {file_path.name}: {len(plans)} プラン")
+                except Exception as e:
+                    print(f"    ⚠️  {file_path.name}: 読み込みエラー ({e})")
+                    preloaded_plans[file_path] = []
+    
+    print(f"\n✅ 全データセットの読み込み完了")
+    print(f"  - 読み込んだデータセット: {len(all_datasets_info)}")
+    total_plans = sum(len(plans) for plans in preloaded_plans.values())
+    print(f"  - 総プラン数: {total_plans}")
+    print()
+    
+    return all_datasets_info, preloaded_plans
+
+
 def run_train_multi_all(args, output_dir: Path, device: torch.device) -> int:
     """20個すべてのデータセットについてleave-one-out validationを実行"""
     # サポートされている20個のデータセット（アルファベット順）
@@ -684,6 +755,13 @@ def run_train_multi_all(args, output_dir: Path, device: torch.device) -> int:
     print(f"出力ディレクトリ: {output_dir}")
     print(f"{'='*80}\n")
     
+    # 最初に1回だけ全データセットのプランを読み込む
+    all_datasets_info, preloaded_plans = load_all_datasets_once_for_dace(
+        plans_dir=plans_dir,
+        available_datasets=available_datasets,
+        max_plans_per_file=args.max_plans_per_file
+    )
+    
     # モデル設定
     featurization = DACEFeaturization()
     plan_features = list(featurization.PLAN_FEATURES)
@@ -697,25 +775,22 @@ def run_train_multi_all(args, output_dir: Path, device: torch.device) -> int:
         print(f"{'#'*80}\n")
         
         try:
-            # データファイルを準備
-            train_files = []
-            test_files = []
+            # 既に収集したファイル情報からtrain/testを分割
+            if test_dataset not in all_datasets_info:
+                print(f"⚠️  {test_dataset}: ファイルが見つかりません。スキップします。")
+                results_summary.append({
+                    'test_dataset': test_dataset,
+                    'status': 'skipped',
+                    'reason': 'missing files'
+                })
+                continue
             
-            for p in txt_files:
-                stem = p.stem  # .txtを除いたファイル名
-                parts = stem.split('_')
-                # 最長マッチ: ALL_DATASETSから最長の一致を探す
-                matched_dataset = None
-                for i in range(len(parts), 0, -1):
-                    candidate = '_'.join(parts[:i])
-                    if candidate in ALL_DATASETS:
-                        matched_dataset = candidate
-                        break
-                
-                if matched_dataset == test_dataset:
-                    test_files.append(p)
-                elif matched_dataset and matched_dataset in available_datasets:
-                    train_files.append(p)
+            train_files = []
+            test_files = all_datasets_info[test_dataset]['files']
+            
+            for ds, info in all_datasets_info.items():
+                if ds != test_dataset:
+                    train_files.extend(info['files'])
             
             if not train_files or not test_files:
                 print(f"⚠️  {test_dataset}: 訓練ファイルまたはテストファイルが見つかりません。スキップします。")
@@ -772,7 +847,9 @@ def run_train_multi_all(args, output_dir: Path, device: torch.device) -> int:
             )
             
             print(f"📊 Leave-One-Out Validation [{idx}/{len(available_datasets)}]:")
+            print(f"  - Training datasets: {len(all_datasets_info) - 1} datasets")
             print(f"  - Training files: {len(train_files)}")
+            print(f"  - Test dataset: {test_dataset}")
             print(f"  - Test files: {len(test_files)}")
             print()
             
@@ -781,7 +858,8 @@ def run_train_multi_all(args, output_dir: Path, device: torch.device) -> int:
                 statistics_file=statistics_file,
                 model_config=model_config,
                 workload_runs=workload_runs,
-                dataloader_options=dataloader_options
+                dataloader_options=dataloader_options,
+                preloaded_plans=preloaded_plans
             )
             
             print(f"Training batches: {len(train_loader)}")

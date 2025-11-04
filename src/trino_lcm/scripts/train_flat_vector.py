@@ -352,6 +352,57 @@ def run_train_multi_all(args, output_dir: Path) -> int:
     print(f"出力ディレクトリ: {output_dir}")
     print(f"{'='*80}\n")
     
+    # 最初に1回だけ全データセットのプランを読み込む
+    def load_all_datasets_once_flat_vector(plans_dir: Path, available_datasets: list, max_plans_per_file=None):
+        """全データセットのプランを1回だけ読み込む"""
+        def infer_dataset_name(p: Path, ALL_DATASETS: list) -> str:
+            stem = p.stem
+            parts = stem.split('_')
+            matched_dataset = None
+            for i in range(len(parts), 0, -1):
+                candidate = '_'.join(parts[:i])
+                if candidate in ALL_DATASETS:
+                    matched_dataset = candidate
+                    break
+            if matched_dataset:
+                return matched_dataset
+            return stem.split('_')[0]
+        
+        txt_files = sorted([p for p in plans_dir.glob('*.txt')])
+        dataset_to_files = {}
+        for p in txt_files:
+            ds = infer_dataset_name(p, ALL_DATASETS)
+            if ds in available_datasets:
+                dataset_to_files.setdefault(ds, []).append(p)
+        
+        all_plans_by_dataset = {}
+        print("=" * 80)
+        print("ステップ0: 全データセットのプランを読み込み中...")
+        print("=" * 80)
+        print()
+        
+        for ds in available_datasets:
+            if ds in dataset_to_files:
+                files = dataset_to_files[ds]
+                print(f"  読み込み中: {ds} ({len(files)} ファイル)...")
+                plans = load_trino_plans_from_files(files, max_plans_per_file)
+                all_plans_by_dataset[ds] = plans
+                print(f"    ✅ {ds}: {len(plans)} プラン")
+        
+        print(f"\n✅ 全データセットの読み込み完了")
+        print(f"  - 読み込んだデータセット: {len(all_plans_by_dataset)}")
+        for ds, plans in all_plans_by_dataset.items():
+            print(f"    - {ds}: {len(plans)} プラン")
+        print()
+        
+        return all_plans_by_dataset
+    
+    all_plans_by_dataset = load_all_datasets_once_flat_vector(
+        plans_dir=plans_dir,
+        available_datasets=available_datasets,
+        max_plans_per_file=args.max_plans_per_file
+    )
+    
     # 各データセットについて訓練・テストを実行
     results_summary = []
     
@@ -361,32 +412,29 @@ def run_train_multi_all(args, output_dir: Path) -> int:
         print(f"{'#'*80}\n")
         
         try:
-            # データファイルを準備
-            train_files = []
-            test_files = []
-            
-            for p in txt_files:
-                stem = p.stem  # .txtを除いたファイル名
-                parts = stem.split('_')
-                # 最長マッチ: ALL_DATASETSから最長の一致を探す
-                matched_dataset = None
-                for i in range(len(parts), 0, -1):
-                    candidate = '_'.join(parts[:i])
-                    if candidate in ALL_DATASETS:
-                        matched_dataset = candidate
-                        break
-                
-                if matched_dataset == test_dataset:
-                    test_files.append(p)
-                elif matched_dataset and matched_dataset in available_datasets:
-                    train_files.append(p)
-            
-            if not train_files or not test_files:
-                print(f"⚠️  {test_dataset}: 訓練ファイルまたはテストファイルが見つかりません。スキップします。")
+            # 既に読み込んだプランからtrain/testを分割
+            if test_dataset not in all_plans_by_dataset:
+                print(f"⚠️  {test_dataset}: プランが見つかりません。スキップします。")
                 results_summary.append({
                     'test_dataset': test_dataset,
                     'status': 'skipped',
-                    'reason': 'missing files'
+                    'reason': 'missing plans'
+                })
+                continue
+            
+            train_plans = []
+            test_plans = all_plans_by_dataset[test_dataset]
+            
+            for ds, plans in all_plans_by_dataset.items():
+                if ds != test_dataset:
+                    train_plans.extend(plans)
+            
+            if not train_plans or not test_plans:
+                print(f"⚠️  {test_dataset}: 訓練プランまたはテストプランが見つかりません。スキップします。")
+                results_summary.append({
+                    'test_dataset': test_dataset,
+                    'status': 'skipped',
+                    'reason': 'missing plans'
                 })
                 continue
             
@@ -394,17 +442,10 @@ def run_train_multi_all(args, output_dir: Path) -> int:
             model_dir = output_dir / f'models_{test_dataset}'
             model_dir.mkdir(parents=True, exist_ok=True)
             
-            # プランの読み込み
-            train_file_paths = [Path(f) for f in train_files]
-            test_file_path = Path(test_files[0])
-            
-            train_plans = load_trino_plans_from_files(train_file_paths, args.max_plans_per_file)
-            test_plans = load_trino_plans_from_files([test_file_path], args.max_plans_per_file)
-            
             print(f"📊 Leave-One-Out Validation [{idx}/{len(available_datasets)}]:")
-            print(f"  - Training files: {len(train_files)}")
-            print(f"  - Test files: {len(test_files)}")
+            print(f"  - Training datasets: {len(all_plans_by_dataset) - 1} datasets")
             print(f"  - Training plans: {len(train_plans)}")
+            print(f"  - Test dataset: {test_dataset}")
             print(f"  - Test plans: {len(test_plans)}")
             print()
             

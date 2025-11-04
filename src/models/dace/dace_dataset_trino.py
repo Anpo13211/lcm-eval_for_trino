@@ -32,8 +32,14 @@ from training.preprocessing.feature_statistics import FeatureType
 def create_dace_dataloader(statistics_file: Path,
                            model_config: DACEModelConfig,
                            workload_runs: WorkloadRuns,
-                           dataloader_options: DataLoaderOptions) -> Tuple[dict, DataLoader, DataLoader, list[DataLoader]]:
-
+                           dataloader_options: DataLoaderOptions,
+                           preloaded_plans=None) -> Tuple[dict, DataLoader, DataLoader, list[DataLoader]]:
+    """
+    Create DACE dataloaders.
+    
+    Args:
+        preloaded_plans: Optional dict mapping file paths to already loaded plans
+    """
     feature_statistics = load_json(statistics_file, namespace=False)
     assert feature_statistics != {}, "Feature statistics file is empty!"
 
@@ -50,7 +56,8 @@ def create_dace_dataloader(statistics_file: Path,
     if workload_runs.train_workload_runs:
         train_dataset, val_dataset = create_dace_datasets(workload_run_paths=workload_runs.train_workload_runs,
                                                           model_config=model_config,
-                                                          val_ratio=dataloader_options.val_ratio)
+                                                          val_ratio=dataloader_options.val_ratio,
+                                                          preloaded_plans=preloaded_plans)
         train_loader: DataLoader = DataLoader(train_dataset, **dataloader_args)
         val_loader: DataLoader = DataLoader(val_dataset, **dataloader_args)
 
@@ -64,7 +71,8 @@ def create_dace_dataloader(statistics_file: Path,
             test_dataset, _ = create_dace_datasets([test_path],
                                                     model_config=model_config,
                                                     shuffle_before_split=False,
-                                                    val_ratio=0.0)
+                                                    val_ratio=0.0,
+                                                    preloaded_plans=preloaded_plans)
             test_loader = DataLoader(test_dataset, **dataloader_args)
             test_loaders.append(test_loader)
 

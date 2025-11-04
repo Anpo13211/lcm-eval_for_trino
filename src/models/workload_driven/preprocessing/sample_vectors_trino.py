@@ -514,7 +514,7 @@ def get_table_samples_from_csv(dataset: str,
         table_path = os.path.join(data_dir, f'{table_name}.csv')
         if os.path.exists(table_path):
             try:
-                # Suppress DtypeWarning for mixed types (common in CSV files)
+                # Suppress DtypeWarning and CSV parsing warnings
                 import warnings
                 with warnings.catch_warnings():
                     # Try to filter DtypeWarning (pandas version-dependent)
@@ -523,10 +523,35 @@ def get_table_samples_from_csv(dataset: str,
                     except AttributeError:
                         # Fallback for older pandas versions
                         warnings.filterwarnings('ignore', message='.*DtypeWarning.*')
+                    # Suppress CSV parsing warnings (field count mismatches)
+                    warnings.filterwarnings('ignore', message='.*Skipping line.*')
+                    warnings.filterwarnings('ignore', message='.*expected.*fields.*')
                     csv_kwargs = vars(schema.csv_kwargs).copy()
                     # Ensure low_memory is set to avoid dtype warnings
                     if 'low_memory' not in csv_kwargs:
                         csv_kwargs['low_memory'] = False
+                    # Suppress CSV parsing errors silently (use on_bad_lines for pandas >= 1.3.0)
+                    # Note: on_bad_lines and error_bad_lines/warn_bad_lines cannot be used together
+                    import inspect
+                    read_csv_sig = inspect.signature(pd.read_csv)
+                    if 'on_bad_lines' in read_csv_sig.parameters:
+                        # pandas >= 1.3.0: use on_bad_lines parameter
+                        # Remove deprecated error_bad_lines/warn_bad_lines if they exist
+                        csv_kwargs.pop('error_bad_lines', None)
+                        csv_kwargs.pop('warn_bad_lines', None)
+                        # If on_bad_lines is already set in schema, use it; otherwise set to 'skip'
+                        if 'on_bad_lines' not in csv_kwargs:
+                            csv_kwargs['on_bad_lines'] = 'skip'
+                        # If schema has 'warn', change to 'skip' to suppress warnings
+                        elif csv_kwargs.get('on_bad_lines') == 'warn':
+                            csv_kwargs['on_bad_lines'] = 'skip'
+                    elif 'error_bad_lines' in read_csv_sig.parameters:
+                        # pandas < 1.3.0: use error_bad_lines parameter (deprecated)
+                        # Remove on_bad_lines if it exists (shouldn't happen, but just in case)
+                        csv_kwargs.pop('on_bad_lines', None)
+                        if 'error_bad_lines' not in csv_kwargs:
+                            csv_kwargs['error_bad_lines'] = False
+                            csv_kwargs['warn_bad_lines'] = False
                     df_sample = pd.read_csv(table_path, **csv_kwargs)
                 if len(df_sample) > no_samples:
                     df_sample = df_sample.sample(random_state=0, n=no_samples)
