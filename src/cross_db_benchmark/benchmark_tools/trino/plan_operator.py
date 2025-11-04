@@ -526,18 +526,60 @@ class TrinoPlanOperator(AbstractPlanOperator):
         return None
     
     def _get_external_table_stats(self):
-        """外部統計情報からreltuplesを取得"""
+        """datasets_statisticsから統計情報を読み込んでreltuplesを取得"""
         table_name = self._get_param('table', '')
         if not table_name:
             return None
         
-        try:
-            from .external_stats import get_global_stats
-            stats = get_global_stats()
-            return stats.get_reltuples(table_name)
-        except ImportError:
-            # 外部統計情報モジュールが利用できない場合
+        # Trinoのテーブル名を正規化（例: iceberg:accidents.nesreca$data@... → nesreca）
+        normalized_table_name = self._normalize_trino_table_name(table_name)
+        
+        # サポートされているデータセット名のリスト（datasets_statisticsディレクトリと一致）
+        supported_datasets = [
+            'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+            'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+            'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+            'tournament', 'tpc_h', 'walmart'
+        ]
+        
+        # テーブル名からスキーマ名を推測（全てのデータセット名をチェック）
+        schema_name = None
+        table_name_lower = table_name.lower()
+        normalized_table_name_lower = normalized_table_name.lower()
+        
+        for dataset in supported_datasets:
+            if dataset in table_name_lower or dataset in normalized_table_name_lower:
+                schema_name = dataset
+                break
+        
+        if not schema_name:
             return None
+        
+        # datasets_statisticsから読み込み（環境変数でパス指定可能）
+        try:
+            import json
+            import os
+            from pathlib import Path
+            
+            # DATASETS_STATISTICS_DIR環境変数でパスを指定可能（デフォルト: datasets_statistics）
+            stats_base = os.getenv('DATASETS_STATISTICS_DIR', 'datasets_statistics')
+            stats_dir = Path(stats_base) / f'iceberg_{schema_name}'
+            table_stats_file = stats_dir / 'table_stats.json'
+            
+            if table_stats_file.exists():
+                with open(table_stats_file, 'r') as f:
+                    table_stats_dict = json.load(f)
+                    
+                # 正規化されたテーブル名で検索
+                if normalized_table_name in table_stats_dict:
+                    stats = table_stats_dict[normalized_table_name]
+                    # reltuplesまたはrow_countを返す
+                    return int(stats.get('reltuples', stats.get('row_count', 0)))
+        except Exception:
+            # 読み込みに失敗した場合はNoneを返す（フォールバックに進む）
+            pass
+        
+        return None
     
     def _estimate_reltuples_from_datatype(self):
         """データ型からreltuplesを推定"""

@@ -61,13 +61,22 @@ def build_parser() -> argparse.ArgumentParser:
         description="Train DACE model for Trino query runtime prediction"
     )
     
+    # モード選択
+    parser.add_argument(
+        '--mode',
+        type=str,
+        choices=['train', 'train_multi_all'],
+        default='train',
+        help='Training mode: train (single dataset) or train_multi_all (leave-one-out across all datasets)'
+    )
+    
     # データ関連
     parser.add_argument(
         '--workload_runs',
         type=str,
         nargs='+',
-        required=True,
-        help='Paths to workload run files (JSON or Trino .txt files) for training'
+        required=False,
+        help='Paths to workload run files (JSON or Trino .txt files) for training (required for train mode)'
     )
     parser.add_argument(
         '--test_workload_runs',
@@ -100,6 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.15,
         help='Validation split ratio (default: 0.15)'
+    )
+    parser.add_argument(
+        '--plans_dir',
+        type=str,
+        default='/Users/an/query_engine/explain_analyze_results/',
+        help='Directory containing .txt plan files for multiple datasets (required for train_multi_all mode)'
     )
     
     # モデル設定
@@ -443,6 +458,7 @@ def run(args) -> int:
     """トレーニングを実行"""
     print("=" * 80)
     print("DACE Model Training for Trino")
+    print(f"Mode: {args.mode}")
     print("=" * 80)
     print()
     
@@ -454,6 +470,14 @@ def run(args) -> int:
     device = torch.device(args.device)
     print(f"Using device: {device}")
     print()
+    
+    # train_multi_allモードの処理
+    if args.mode == 'train_multi_all':
+        return run_train_multi_all(args, output_dir, device)
+    
+    # 従来のtrainモード
+    if not args.workload_runs:
+        raise ValueError("--workload_runs is required for train mode")
     
     # モデル設定（featurizationを先に作成）
     featurization = DACEFeaturization()
@@ -619,6 +643,287 @@ def run(args) -> int:
     print(f"Best validation Q-Error: {best_q_error:.4f}")
     print(f"Model saved to: {output_dir}")
     print("=" * 80)
+    
+    return 0
+
+
+def run_train_multi_all(args, output_dir: Path, device: torch.device) -> int:
+    """20個すべてのデータセットについてleave-one-out validationを実行"""
+    # サポートされている20個のデータセット（アルファベット順）
+    ALL_DATASETS = [
+        'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+        'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+        'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+        'tournament', 'tpc_h', 'walmart'
+    ]
+    
+    plans_dir = Path(args.plans_dir)
+    
+    # 利用可能なデータセットを確認
+    txt_files = sorted([p for p in plans_dir.glob('*.txt')])
+    available_datasets = set()
+    for p in txt_files:
+        stem = p.stem  # .txtを除いたファイル名
+        parts = stem.split('_')
+        # 最長マッチ: ALL_DATASETSから最長の一致を探す（tpc_hなどアンダースコアを含むデータセット名に対応）
+        matched_dataset = None
+        for i in range(len(parts), 0, -1):
+            candidate = '_'.join(parts[:i])
+            if candidate in ALL_DATASETS:
+                matched_dataset = candidate
+                break
+        if matched_dataset:
+            available_datasets.add(matched_dataset)
+    
+    available_datasets = sorted(list(available_datasets))
+    print(f"\n{'='*80}")
+    print(f"Leave-One-Out Validation for All Datasets (DACE)")
+    print(f"{'='*80}")
+    print(f"利用可能なデータセット: {len(available_datasets)} / {len(ALL_DATASETS)}")
+    print(f"データセット: {', '.join(available_datasets)}")
+    print(f"出力ディレクトリ: {output_dir}")
+    print(f"{'='*80}\n")
+    
+    # モデル設定
+    featurization = DACEFeaturization()
+    plan_features = list(featurization.PLAN_FEATURES)
+    
+    # 各データセットについて訓練・テストを実行
+    results_summary = []
+    
+    for idx, test_dataset in enumerate(available_datasets, 1):
+        print(f"\n{'#'*80}")
+        print(f"# [{idx}/{len(available_datasets)}] Testing dataset: {test_dataset}")
+        print(f"{'#'*80}\n")
+        
+        try:
+            # データファイルを準備
+            train_files = []
+            test_files = []
+            
+            for p in txt_files:
+                stem = p.stem  # .txtを除いたファイル名
+                parts = stem.split('_')
+                # 最長マッチ: ALL_DATASETSから最長の一致を探す
+                matched_dataset = None
+                for i in range(len(parts), 0, -1):
+                    candidate = '_'.join(parts[:i])
+                    if candidate in ALL_DATASETS:
+                        matched_dataset = candidate
+                        break
+                
+                if matched_dataset == test_dataset:
+                    test_files.append(p)
+                elif matched_dataset and matched_dataset in available_datasets:
+                    train_files.append(p)
+            
+            if not train_files or not test_files:
+                print(f"⚠️  {test_dataset}: 訓練ファイルまたはテストファイルが見つかりません。スキップします。")
+                results_summary.append({
+                    'test_dataset': test_dataset,
+                    'status': 'skipped',
+                    'reason': 'missing files'
+                })
+                continue
+            
+            # 統計ファイルを生成（全データから）
+            all_stat_files = train_files + test_files
+            model_dir = output_dir / f'models_{test_dataset}'
+            model_dir.mkdir(parents=True, exist_ok=True)
+            statistics_file = model_dir / 'feature_statistics.json'
+            
+            generate_feature_statistics_from_plans(
+                plan_files=[str(f) for f in all_stat_files],
+                output_path=statistics_file,
+                plan_features=plan_features,
+                max_plans_per_file=args.max_plans_per_file
+            )
+            
+            # ワークロード設定
+            train_workload_runs = [p for p in train_files]
+            test_workload_runs = [p for p in test_files]
+            
+            workload_runs = WorkloadRuns(
+                train_workload_runs=train_workload_runs,
+                test_workload_runs=test_workload_runs
+            )
+            
+            # モデル設定
+            model_config = DACEModelConfig(
+                batch_size=args.batch_size,
+                hidden_dim=args.hidden_dim,
+                node_length=args.node_length,
+                pad_length=args.pad_length,
+                max_runtime=args.max_runtime,
+                loss_weight=args.loss_weight,
+                num_workers=args.num_workers,
+                device=device,
+                loss_class_name='DaceLoss',
+                cap_training_samples=args.cap_training_samples,
+                featurization=featurization,
+                optimizer_kwargs=dict(lr=args.learning_rate)
+            )
+            
+            # データローダー設定
+            dataloader_options = DataLoaderOptions(
+                shuffle=True,
+                val_ratio=args.val_ratio,
+                pin_memory=(device.type == 'cuda')
+            )
+            
+            print(f"📊 Leave-One-Out Validation [{idx}/{len(available_datasets)}]:")
+            print(f"  - Training files: {len(train_files)}")
+            print(f"  - Test files: {len(test_files)}")
+            print()
+            
+            print("Creating dataloaders...")
+            feature_statistics, train_loader, val_loader, test_loaders = create_dace_dataloader(
+                statistics_file=statistics_file,
+                model_config=model_config,
+                workload_runs=workload_runs,
+                dataloader_options=dataloader_options
+            )
+            
+            print(f"Training batches: {len(train_loader)}")
+            if val_loader:
+                print(f"Validation batches: {len(val_loader)}")
+            if test_loaders:
+                print(f"Test loaders: {len(test_loaders)}")
+            print()
+            
+            # モデル作成
+            print("Creating DACE model...")
+            model = DACELora(config=model_config)
+            model.to(device)
+            
+            # オプティマイザー
+            optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+            
+            # 訓練ループ
+            print("=" * 80)
+            print("Starting training...")
+            print("=" * 80)
+            print()
+            
+            best_q_error = float('inf')
+            best_epoch = 0
+            
+            for epoch in range(1, args.epochs + 1):
+                # 訓練
+                train_loss = train_epoch(model, train_loader, optimizer, device, epoch)
+                
+                # 検証
+                if val_loader and epoch % args.log_every == 0:
+                    q_error, rmse = validate(model, val_loader, device)
+                    
+                    print(f"Epoch {epoch}/{args.epochs}")
+                    print(f"  Train Loss: {train_loss:.4f}")
+                    print(f"  Val Q-Error: {q_error:.4f}")
+                    print(f"  Val RMSE: {rmse:.4f}")
+                    print()
+                    
+                    # ベストモデル保存
+                    if q_error < best_q_error:
+                        best_q_error = q_error
+                        best_epoch = epoch
+                        checkpoint_path = model_dir / 'best_model.pt'
+                        torch.save({
+                            'epoch': epoch,
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'q_error': q_error,
+                            'rmse': rmse,
+                        }, checkpoint_path)
+                        print(f"  ✓ Saved best model (Q-Error: {q_error:.4f})")
+                        print()
+                
+                # 定期的なチェックポイント保存
+                if epoch % args.save_every == 0:
+                    checkpoint_path = model_dir / f'checkpoint_epoch_{epoch}.pt'
+                    torch.save({
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                    }, checkpoint_path)
+            
+            # テスト評価
+            test_results = {}
+            if test_loaders:
+                print("=" * 80)
+                print("Testing...")
+                print("=" * 80)
+                
+                all_test_q_errors = []
+                all_test_rmses = []
+                
+                for i, test_loader in enumerate(test_loaders):
+                    q_error, rmse = validate(model, test_loader, device)
+                    all_test_q_errors.append(q_error)
+                    all_test_rmses.append(rmse)
+                    print(f"Test Loader {i+1}:")
+                    print(f"  Q-Error: {q_error:.4f}")
+                    print(f"  RMSE: {rmse:.4f}")
+                    print()
+                
+                test_results = {
+                    'test_mean_q_error': float(np.mean(all_test_q_errors)) if all_test_q_errors else None,
+                    'test_median_q_error': float(np.median(all_test_q_errors)) if all_test_q_errors else None,
+                    'test_mean_rmse': float(np.mean(all_test_rmses)) if all_test_rmses else None,
+                    'test_samples': sum(len(loader.dataset) for loader in test_loaders) if test_loaders else 0
+                }
+                
+                # テスト結果を保存
+                results_file = model_dir / 'test_results.json'
+                with open(results_file, 'w') as f:
+                    json.dump(test_results, f, indent=2)
+                print(f"✅ テスト結果を保存: {results_file}")
+                print()
+            
+            # 結果を保存
+            results_summary.append({
+                'test_dataset': test_dataset,
+                'model_dir': str(model_dir),
+                'best_val_q_error': float(best_q_error),
+                'best_epoch': int(best_epoch),
+                **test_results,
+                'status': 'completed'
+            })
+            
+            print(f"✅ [{idx}/{len(available_datasets)}] {test_dataset} の訓練・テスト完了")
+            print(f"   モデル保存先: {model_dir}")
+            print()
+            
+        except Exception as e:
+            print(f"❌ [{idx}/{len(available_datasets)}] {test_dataset} でエラーが発生:")
+            print(f"   {e}")
+            import traceback
+            traceback.print_exc()
+            results_summary.append({
+                'test_dataset': test_dataset,
+                'status': 'failed',
+                'error': str(e)
+            })
+            continue
+    
+    # 全体のサマリーを保存
+    summary_file = output_dir / 'leave_one_out_summary.json'
+    with open(summary_file, 'w') as f:
+        json.dump({
+            'total_datasets': len(available_datasets),
+            'completed': len([r for r in results_summary if r['status'] == 'completed']),
+            'failed': len([r for r in results_summary if r['status'] == 'failed']),
+            'skipped': len([r for r in results_summary if r.get('status') == 'skipped']),
+            'results': results_summary
+        }, f, indent=2)
+    
+    print("\n" + "=" * 80)
+    print("🎉 全データセットでのLeave-One-Out Validation完了！")
+    print("=" * 80)
+    print(f"完了: {len([r for r in results_summary if r['status'] == 'completed'])}/{len(available_datasets)}")
+    print(f"失敗: {len([r for r in results_summary if r['status'] == 'failed'])}/{len(available_datasets)}")
+    print(f"スキップ: {len([r for r in results_summary if r.get('status') == 'skipped'])}/{len(available_datasets)}")
+    print(f"サマリーファイル: {summary_file}")
+    print()
     
     return 0
 

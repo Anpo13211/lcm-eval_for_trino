@@ -573,11 +573,20 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser for Zero-Shot training."""
     parser = argparse.ArgumentParser(description='Train Trino Zero-Shot Model (統合版)')
     
+    # モード選択
+    parser.add_argument(
+        '--mode',
+        type=str,
+        choices=['train', 'train_multi_all'],
+        default='train',
+        help='Training mode: train (single dataset) or train_multi_all (leave-one-out across all datasets)'
+    )
+    
     # データ関連の引数
-    parser.add_argument('--train_files', type=str, required=True,
-                        help='トレーニング用ファイルパス（カンマ区切り）')
-    parser.add_argument('--test_file', type=str, required=True,
-                        help='テスト用ファイルパス')
+    parser.add_argument('--train_files', type=str, required=False,
+                        help='トレーニング用ファイルパス（カンマ区切り、trainモードで必須）')
+    parser.add_argument('--test_file', type=str, required=False,
+                        help='テスト用ファイルパス（trainモードで必須）')
     parser.add_argument('--statistics_file', type=str, default=None,
                         help='特徴量統計情報ファイルのパス（オプション）')
     parser.add_argument('--statistics_dir', type=str, default=None,
@@ -608,6 +617,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help='検証セットの割合')
     parser.add_argument('--num_workers', type=int, default=0,
                         help='DataLoaderのワーカー数')
+    parser.add_argument(
+        '--plans_dir',
+        type=str,
+        default='/Users/an/query_engine/explain_analyze_results/',
+        help='Directory containing .txt plan files for multiple datasets (required for train_multi_all mode)'
+    )
     
     return parser
 
@@ -621,7 +636,17 @@ def run(args) -> int:
     
     print("=" * 80)
     print("Trino Zero-Shot Model Training (統合版)")
+    print(f"Mode: {args.mode}")
     print("=" * 80)
+    
+    # train_multi_allモードの処理
+    if args.mode == 'train_multi_all':
+        return run_train_multi_all(args, output_dir)
+    
+    # 従来のtrainモード
+    if not args.train_files or not args.test_file:
+        raise ValueError("--train_files and --test_file are required for train mode")
+    
     print(f"Train files: {args.train_files}")
     print(f"Test file: {args.test_file}")
     print(f"Output directory: {args.output_dir}")
@@ -900,6 +925,306 @@ def run(args) -> int:
     print(f"Test Median Q-Error: {test_median_q_error:.4f}")
     print(f"Model saved to: {output_dir / 'best_model.pt'}")
     print("=" * 80)
+    
+    return 0
+
+
+def run_train_multi_all(args, output_dir: Path) -> int:
+    """20個すべてのデータセットについてleave-one-out validationを実行"""
+    # サポートされている20個のデータセット（アルファベット順）
+    ALL_DATASETS = [
+        'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+        'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+        'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+        'tournament', 'tpc_h', 'walmart'
+    ]
+    
+    plans_dir = Path(args.plans_dir)
+    
+    # 利用可能なデータセットを確認
+    txt_files = sorted([p for p in plans_dir.glob('*.txt')])
+    available_datasets = set()
+    for p in txt_files:
+        stem = p.stem  # .txtを除いたファイル名
+        parts = stem.split('_')
+        # 最長マッチ: ALL_DATASETSから最長の一致を探す（tpc_hなどアンダースコアを含むデータセット名に対応）
+        matched_dataset = None
+        for i in range(len(parts), 0, -1):
+            candidate = '_'.join(parts[:i])
+            if candidate in ALL_DATASETS:
+                matched_dataset = candidate
+                break
+        if matched_dataset:
+            available_datasets.add(matched_dataset)
+    
+    available_datasets = sorted(list(available_datasets))
+    print(f"\n{'='*80}")
+    print(f"Leave-One-Out Validation for All Datasets (Zero-Shot)")
+    print(f"{'='*80}")
+    print(f"利用可能なデータセット: {len(available_datasets)} / {len(ALL_DATASETS)}")
+    print(f"データセット: {', '.join(available_datasets)}")
+    print(f"出力ディレクトリ: {output_dir}")
+    print(f"{'='*80}\n")
+    
+    # 各データセットについて訓練・テストを実行
+    results_summary = []
+    plan_featurization = TrinoTrueCardDetail()
+    
+    for idx, test_dataset in enumerate(available_datasets, 1):
+        print(f"\n{'#'*80}")
+        print(f"# [{idx}/{len(available_datasets)}] Testing dataset: {test_dataset}")
+        print(f"{'#'*80}\n")
+        
+        try:
+            # データファイルを準備
+            train_files = []
+            test_files = []
+            
+            for p in txt_files:
+                stem = p.stem  # .txtを除いたファイル名
+                parts = stem.split('_')
+                # 最長マッチ: ALL_DATASETSから最長の一致を探す
+                matched_dataset = None
+                for i in range(len(parts), 0, -1):
+                    candidate = '_'.join(parts[:i])
+                    if candidate in ALL_DATASETS:
+                        matched_dataset = candidate
+                        break
+                
+                if matched_dataset == test_dataset:
+                    test_files.append(p)
+                elif matched_dataset and matched_dataset in available_datasets:
+                    train_files.append(p)
+            
+            if not train_files or not test_files:
+                print(f"⚠️  {test_dataset}: 訓練ファイルまたはテストファイルが見つかりません。スキップします。")
+                results_summary.append({
+                    'test_dataset': test_dataset,
+                    'status': 'skipped',
+                    'reason': 'missing files'
+                })
+                continue
+            
+            # モデルディレクトリ
+            model_dir = output_dir / f'models_{test_dataset}'
+            model_dir.mkdir(parents=True, exist_ok=True)
+            
+            # ファイルパスを文字列に変換
+            train_file_paths = [str(f) for f in train_files]
+            test_file_path = str(test_files[0])  # 最初のテストファイルを使用
+            
+            # トレーニングプランの読み込み
+            train_plans = load_plans_from_files([Path(p) for p in train_file_paths], args.max_plans_per_file)
+            
+            # テストプランの読み込み
+            test_plans = load_plans_from_files([Path(test_file_path)], args.max_plans_per_file)
+            
+            print(f"📊 Leave-One-Out Validation [{idx}/{len(available_datasets)}]:")
+            print(f"  - Training files: {len(train_files)}")
+            print(f"  - Test files: {len(test_files)}")
+            print(f"  - Training plans: {len(train_plans)}")
+            print(f"  - Test plans: {len(test_plans)}")
+            print()
+            
+            # トレーニング/検証セットの分割（19個のデータセットをtrain/valに分割）
+            val_size = int(len(train_plans) * args.val_ratio)
+            if val_size == 0 and len(train_plans) > 1:
+                val_size = 1
+            train_size = len(train_plans) - val_size
+            
+            train_plans_split, val_plans_split = random_split(
+                train_plans,
+                [train_size, val_size],
+                generator=torch.Generator().manual_seed(42)
+            )
+            
+            print(f"✅ 19個のデータセットから作成:")
+            print(f"  - Train plans: {len(train_plans_split)}")
+            print(f"  - Val plans (from 19 datasets): {len(val_plans_split)}")
+            print()
+            
+            # 特徴量統計の準備（全プランから）
+            all_plans_for_stats = train_plans + test_plans
+            statistics_file = model_dir / 'feature_statistics.json' if args.statistics_file is None else Path(args.statistics_file)
+            feature_statistics = create_feature_statistics_from_plans(
+                all_plans_for_stats,
+                plan_featurization,
+                str(statistics_file) if statistics_file != model_dir / 'feature_statistics.json' else None
+            )
+            
+            # データベース統計情報（簡略化：テストデータセットの統計を使用）
+            db_statistics = {}
+            if args.statistics_dir:
+                try:
+                    loaded_stats = load_database_statistics(
+                        catalog='iceberg',
+                        schema=test_dataset,
+                        stats_dir=args.statistics_dir,
+                        prefer_zero_shot=True
+                    )
+                    from types import SimpleNamespace
+                    db_stats = SimpleNamespace(
+                        table_stats=loaded_stats.get('table_stats', {}),
+                        column_stats=loaded_stats.get('column_stats', {})
+                    )
+                    db_statistics[0] = db_stats
+                except Exception as e:
+                    print(f"⚠️  統計情報の読み込みに失敗: {e}")
+            
+            # データセットとDataLoaderの作成
+            collate_fn = functools.partial(
+                trino_plan_collator,
+                feature_statistics=feature_statistics,
+                db_statistics=db_statistics,
+                plan_featurization=plan_featurization
+            )
+            
+            train_loader = DataLoader(
+                TrinoPlanDataset([train_plans[i] for i in train_plans_split.indices]),
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_workers=args.num_workers,
+                collate_fn=collate_fn
+            )
+            
+            val_loader = DataLoader(
+                TrinoPlanDataset([train_plans[i] for i in val_plans_split.indices]),
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.num_workers,
+                collate_fn=collate_fn
+            )
+            
+            test_loader = DataLoader(
+                TrinoPlanDataset(test_plans),
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.num_workers,
+                collate_fn=collate_fn
+            )
+            
+            # モデル作成
+            model_config = ZeroShotModelConfig(
+                hidden_dim=args.hidden_dim,
+                hidden_dim_plan=args.hidden_dim,
+                hidden_dim_pred=args.hidden_dim,
+                p_dropout=0.1,
+                featurization=plan_featurization,
+                output_dim=1,
+                batch_size=args.batch_size
+            )
+            
+            encoders = [
+                ('column', plan_featurization.COLUMN_FEATURES),
+                ('table', plan_featurization.TABLE_FEATURES),
+                ('output_column', plan_featurization.OUTPUT_COLUMN_FEATURES),
+                ('filter_column', plan_featurization.FILTER_FEATURES + plan_featurization.COLUMN_FEATURES),
+                ('plan', plan_featurization.PLAN_FEATURES),
+                ('logical_pred', plan_featurization.FILTER_FEATURES),
+            ]
+            prepasses = [dict(model_name='column_output_column', e_name='col_output_col')]
+            tree_model_types = ['column_output_column']
+            
+            model = ZeroShotModel(
+                model_config=model_config,
+                device=args.device,
+                feature_statistics=feature_statistics,
+                plan_featurization=plan_featurization,
+                prepasses=prepasses,
+                add_tree_model_types=tree_model_types,
+                encoders=encoders,
+                allow_empty_edges=True
+            )
+            model = model.to(args.device)
+            
+            # オプティマイザとスケジューラ
+            optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.5, patience=10, verbose=False
+            )
+            
+            # トレーニングループ
+            best_val_loss = float('inf')
+            best_epoch = 0
+            
+            for epoch in range(args.epochs):
+                train_loss = train_epoch(model, train_loader, optimizer, args.device)
+                val_result = validate(model, val_loader, args.device)
+                val_loss, val_median_q_error, val_mean_q_error, val_rmse = val_result
+                
+                scheduler.step(val_loss)
+                
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_epoch = epoch + 1
+                    torch.save(model.state_dict(), model_dir / 'best_model.pt')
+                
+                if (epoch + 1) % 5 == 0 or epoch == 0:
+                    median_q = f"{val_median_q_error:.4f}" if val_median_q_error is not None else "N/A"
+                    mean_q = f"{val_mean_q_error:.4f}" if val_mean_q_error is not None else "N/A"
+                    print(f"Epoch [{epoch+1}/{args.epochs}] Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Median Q-Error: {median_q}, Val Mean Q-Error: {mean_q}")
+            
+            # テストセットでの評価
+            model.load_state_dict(torch.load(model_dir / 'best_model.pt'))
+            test_result = validate(model, test_loader, args.device)
+            test_loss, test_median_q_error, test_mean_q_error, test_rmse = test_result
+            
+            # テスト結果を保存
+            test_results = {
+                'test_loss': float(test_loss),
+                'test_median_q_error': float(test_median_q_error) if test_median_q_error is not None else None,
+                'test_mean_q_error': float(test_mean_q_error) if test_mean_q_error is not None else None,
+                'test_rmse': float(test_rmse) if test_rmse is not None else None,
+                'test_samples': len(test_plans)
+            }
+            
+            results_file = model_dir / 'test_results.json'
+            with open(results_file, 'w') as f:
+                json.dump(test_results, f, indent=2)
+            
+            results_summary.append({
+                'test_dataset': test_dataset,
+                'model_dir': str(model_dir),
+                'best_val_loss': float(best_val_loss),
+                'best_epoch': int(best_epoch),
+                **test_results,
+                'status': 'completed'
+            })
+            
+            print(f"✅ [{idx}/{len(available_datasets)}] {test_dataset} の訓練・テスト完了")
+            print(f"   モデル保存先: {model_dir}")
+            print()
+            
+        except Exception as e:
+            print(f"❌ [{idx}/{len(available_datasets)}] {test_dataset} でエラーが発生:")
+            print(f"   {e}")
+            import traceback
+            traceback.print_exc()
+            results_summary.append({
+                'test_dataset': test_dataset,
+                'status': 'failed',
+                'error': str(e)
+            })
+            continue
+    
+    # 全体のサマリーを保存
+    summary_file = output_dir / 'leave_one_out_summary.json'
+    with open(summary_file, 'w') as f:
+        json.dump({
+            'total_datasets': len(available_datasets),
+            'completed': len([r for r in results_summary if r['status'] == 'completed']),
+            'failed': len([r for r in results_summary if r['status'] == 'failed']),
+            'skipped': len([r for r in results_summary if r.get('status') == 'skipped']),
+            'results': results_summary
+        }, f, indent=2)
+    
+    print("\n" + "=" * 80)
+    print("🎉 全データセットでのLeave-One-Out Validation完了！")
+    print("=" * 80)
+    print(f"完了: {len([r for r in results_summary if r['status'] == 'completed'])}/{len(available_datasets)}")
+    print(f"失敗: {len([r for r in results_summary if r['status'] == 'failed'])}/{len(available_datasets)}")
+    print(f"サマリーファイル: {summary_file}")
+    print()
     
     return 0
 

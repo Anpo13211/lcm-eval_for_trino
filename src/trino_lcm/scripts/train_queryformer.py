@@ -48,7 +48,6 @@ from training.preprocessing.feature_statistics import gather_feature_statistics
 from training.training.metrics import RMSE, MAPE, QError, Metric
 from training.training.checkpoint import save_checkpoint, load_checkpoint
 from sklearn.preprocessing import MinMaxScaler
-from gensim.models import KeyedVectors
 
 
 def parse_and_prepare_data(
@@ -372,8 +371,24 @@ def parse_and_prepare_leave_one_out(
     assert txt_files, f"No txt files found in {plans_dir}"
 
     def infer_dataset_name(p: Path) -> str:
-        # Assume dataset name is prefix before first underscore
-        stem = p.name
+        # 最長マッチ: ALL_DATASETSから最長の一致を探す（tpc_hなどアンダースコアを含むデータセット名に対応）
+        ALL_DATASETS = [
+            'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+            'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+            'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+            'tournament', 'tpc_h', 'walmart'
+        ]
+        stem = p.stem  # .txtを除いたファイル名
+        parts = stem.split('_')
+        matched_dataset = None
+        for i in range(len(parts), 0, -1):
+            candidate = '_'.join(parts[:i])
+            if candidate in ALL_DATASETS:
+                matched_dataset = candidate
+                break
+        if matched_dataset:
+            return matched_dataset
+        # フォールバック: 最初の部分を返す
         return stem.split('_')[0]
 
     dataset_to_files = {}
@@ -871,7 +886,10 @@ def train_queryformer_trino(
     label_norm,
     config: dict,
     model_dir: Path,
-    device: str = 'cpu'
+    device: str = 'cpu',
+    test_loader: Optional[DataLoader] = None,
+    save_test_results: bool = False,
+    test_dataset_name: Optional[str] = None
 ):
     """
     QueryFormerモデルをトレーニング
@@ -1042,13 +1060,103 @@ def train_queryformer_trino(
     print(f"  - Best val_loss: {best_val_loss:.4f}")
     print()
     
+    # テストセットでの最終評価（提供されている場合）
+    if test_loader is not None:
+        print("=" * 80)
+        print("ステップ4: テストセットでの最終評価")
+        print("=" * 80)
+        print()
+        
+        model.eval()
+        test_loss = 0
+        test_samples = 0
+        all_test_preds = []
+        all_test_labels = []
+        
+        with torch.no_grad():
+            for batch in test_loader:
+                features, join_ids, attention_bias, rel_pos, node_heights, labels = batch
+                
+                features = features.to(device)
+                join_ids = join_ids.to(device)
+                attention_bias = attention_bias.to(device)
+                rel_pos = rel_pos.to(device)
+                node_heights = node_heights.to(device)
+                labels = labels.to(device)
+                
+                predictions = model((features, join_ids, attention_bias, rel_pos, node_heights))
+                labels = labels.view(-1, 1)
+                loss = model.loss_fxn(predictions, labels)
+                
+                test_loss += loss.item() * len(labels)
+                test_samples += len(labels)
+                
+                # 逆変換して保存
+                if label_norm is not None:
+                    preds_denorm = label_norm.inverse_transform(predictions.cpu().numpy())
+                    labels_denorm = label_norm.inverse_transform(labels.cpu().numpy())
+                else:
+                    preds_denorm = predictions.cpu().numpy()
+                    labels_denorm = labels.cpu().numpy()
+                
+                all_test_preds.append(preds_denorm.flatten())
+                all_test_labels.append(labels_denorm.flatten())
+        
+        avg_test_loss = test_loss / test_samples if test_samples > 0 else 0
+        all_test_preds = np.concatenate(all_test_preds)
+        all_test_labels = np.concatenate(all_test_labels)
+        
+        # メトリクス計算
+        from training.training.metrics import RMSE, QError
+        
+        # Q-Error計算（0以下の値をクリップ）
+        min_val = 0.1
+        all_test_preds_clipped = np.clip(all_test_preds, min_val, np.inf)
+        all_test_labels_clipped = np.clip(all_test_labels, min_val, np.inf)
+        
+        q_error_metric = QError(min_val=min_val)
+        rmse_metric = RMSE()
+        
+        q_error_value = q_error_metric.evaluate_metric(labels=all_test_labels_clipped, preds=all_test_preds_clipped)
+        rmse_value = rmse_metric.evaluate_metric(labels=all_test_labels, preds=all_test_preds)
+        
+        print(f"📊 テストセット評価結果:")
+        print(f"  - Test Loss: {avg_test_loss:.4f}")
+        print(f"  - Test RMSE: {rmse_value:.4f}秒" if rmse_value else "  - Test RMSE: N/A")
+        median_q_error = np.median(np.maximum(all_test_preds_clipped / all_test_labels_clipped, all_test_labels_clipped / all_test_preds_clipped)) if len(all_test_preds_clipped) > 0 else None
+        print(f"  - Test Median Q-Error: {median_q_error:.4f}" if median_q_error is not None else "  - Test Median Q-Error: N/A")
+        print(f"  - Test Mean Q-Error: {q_error_value:.4f}" if q_error_value else "  - Test Mean Q-Error: N/A")
+        print(f"  - サンプル数: {test_samples}")
+        print()
+        
+        # テスト結果を保存（save_test_resultsがTrueの場合）
+        if save_test_results:
+            test_results = {
+                'test_dataset': test_dataset_name or 'unknown',
+                'test_loss': float(avg_test_loss),
+                'test_rmse': float(rmse_value) if rmse_value else None,
+                'test_median_q_error': float(median_q_error) if median_q_error is not None else None,
+                'test_mean_q_error': float(q_error_value) if q_error_value else None,
+                'test_samples': int(test_samples),
+                'predictions': all_test_preds.tolist(),
+                'labels': all_test_labels.tolist()
+            }
+            
+            results_file = model_dir / 'test_results.json'
+            results_file.parent.mkdir(parents=True, exist_ok=True)
+            import json
+            with open(results_file, 'w') as f:
+                json.dump(test_results, f, indent=2)
+            print(f"✅ テスト結果を保存: {results_file}")
+            print()
+    
     return model, metrics
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser for QueryFormer training."""
     parser = argparse.ArgumentParser(description='Trino QueryFormer Training')
-    parser.add_argument('--mode', choices=['train', 'train_multi', 'predict'], default='train')
+    parser.add_argument('--mode', choices=['train', 'train_multi', 'train_multi_all', 'predict'], default='train')
     parser.add_argument('--model_type', default='query_former')
     parser.add_argument('--dataset', required=False, default=None, help='Dataset name (e.g., accidents, imdb)')
     parser.add_argument('--txt_file', required=False, default=None, help='Path to EXPLAIN ANALYZE .txt file')
@@ -1065,6 +1173,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--plans_dir', type=str, default='/Users/an/query_engine/explain_analyze_results/', help='Dir of .txt plans for multiple datasets')
     parser.add_argument('--test_dataset', type=str, default=None, help='Dataset name to hold out (prefix in filename)')
+    parser.add_argument('--val_ratio', type=float, default=0.15, help='Validation ratio for splitting 19 training datasets (default: 0.15)')
     return parser
 
 
@@ -1123,7 +1232,8 @@ def run(args) -> int:
             'max_num_filters': args.max_num_filters
         }
         
-        model, metrics = train_queryformer_trino(
+        # モデルはmodel_dirに保存されるため、戻り値は使用しない
+        _ = train_queryformer_trino(
             train_loader=train_loader,
             val_loader=val_loader,
             feature_statistics=feature_statistics,
@@ -1149,18 +1259,37 @@ def run(args) -> int:
                 no_samples=args.no_samples
             )
         
-        # Create loaders: train on 19 datasets, validate on held-out dataset
-        train_loader, _, label_norm, feature_statistics = create_simple_dataloader(
+        # データセット数の計算
+        train_datasets_set = set()
+        for p in train_plans:
+            ds = getattr(p, 'dataset', None)
+            if ds:
+                train_datasets_set.add(ds)
+        
+        print(f"📊 Leave-One-Out Validation:")
+        print(f"  - Training datasets: {len(train_datasets_set)} datasets")
+        print(f"  - Training plans: {len(train_plans)} plans")
+        print(f"  - Test dataset: {args.test_dataset}")
+        print(f"  - Test plans: {len(test_plans)} plans")
+        print()
+        
+        # Create loaders: 19 datasetsをtraining (約85%)とvalidation (約15%)に分割
+        train_loader, val_loader_train, label_norm, feature_statistics = create_simple_dataloader(
             plans=train_plans,
             feature_statistics=feature_statistics,
             column_statistics=column_statistics,
             database_statistics=database_statistics,
             batch_size=args.batch_size,
-            val_ratio=0.0,
+            val_ratio=args.val_ratio,  # 19個のデータセットをtrain/valに分割（デフォルト: 0.15）
             shuffle=True,
             histogram_bin_size=args.histogram_bin_number,
             max_num_filters=args.max_num_filters
         )
+        
+        print(f"✅ 19個のデータセットから作成:")
+        print(f"  - Train loader: {len(train_loader.dataset)} サンプル")
+        print(f"  - Val loader (from 19 datasets): {len(val_loader_train.dataset)} サンプル")
+        print()
         
         # Build test loader separately (use same feature_statistics)
         # Reuse function by treating test plans as entire dataset and no split
@@ -1301,18 +1430,42 @@ def run(args) -> int:
         attention_bias_tensor = torch.cat(all_attention_bias)
         rel_pos_tensor = torch.cat(all_rel_pos)
         node_heights_tensor = torch.cat(all_node_heights)
-        labels_tensor = torch.tensor(all_labels, dtype=torch.float32).view(-1, 1)
-        from torch.utils.data import TensorDataset
-        test_dataset_tensor = TensorDataset(features_tensor, join_ids_tensor, attention_bias_tensor, rel_pos_tensor, node_heights_tensor, labels_tensor)
-        val_loader = DataLoader(test_dataset_tensor, batch_size=args.batch_size, shuffle=False)
+        # Test labelsも同じlabel_normで正規化する必要がある
+        # label_normは訓練データから作成されているため、それをテストデータにも適用
+        test_labels_array = np.array(all_labels).reshape(-1, 1)
+        if label_norm is not None:
+            normalized_test_labels = torch.tensor(
+                label_norm.transform(np.log1p(test_labels_array)).flatten(),
+                dtype=torch.float32
+            )
+        else:
+            # label_normがない場合はそのまま使用
+            normalized_test_labels = torch.tensor(all_labels, dtype=torch.float32)
         
-        # Train using test loader as validation
+        from torch.utils.data import TensorDataset
+        test_dataset_tensor = TensorDataset(
+            features_tensor, 
+            join_ids_tensor, 
+            attention_bias_tensor, 
+            rel_pos_tensor, 
+            node_heights_tensor, 
+            normalized_test_labels.view(-1, 1)  # 正規化されたラベルを使用
+        )
+        test_loader = DataLoader(test_dataset_tensor, batch_size=args.batch_size, shuffle=False)
+        
+        print(f"✅ テストデータセット（{args.test_dataset}）から作成:")
+        print(f"  - Test loader: {len(test_loader.dataset)} サンプル")
+        print()
+        
+        # Train using validation loader from 19 datasets for early stopping
+        # After training, evaluate on test loader
+        # モデルとテスト結果はmodel_dirに保存されるため、戻り値は使用しない
         model_dir = output_dir / f'models_{args.test_dataset}'
-        model, metrics = train_queryformer_trino(
+        _ = train_queryformer_trino(
             train_loader=train_loader,
-            val_loader=val_loader,
+            val_loader=val_loader_train,  # 19個のデータセットから分割したvalidation setを使用
             feature_statistics=feature_statistics,
-            label_norm=None,
+            label_norm=label_norm,  # 訓練データから作成したlabel_normを使用
             config={
                 'epochs': args.epochs,
                 'batch_size': args.batch_size,
@@ -1323,13 +1476,341 @@ def run(args) -> int:
                 'max_num_filters': args.max_num_filters
             },
             model_dir=model_dir,
-            device=args.device
+            device=args.device,
+            test_loader=test_loader  # テスト用に追加
         )
         print("=" * 80)
         print("🎉 マルチデータセット学習完了！")
         print("=" * 80)
         print(f"モデル保存先: {model_dir}")
         print()
+        return 0
+    
+    elif args.mode == 'train_multi_all':
+        # 20個すべてのデータセットについてleave-one-out validationを実行
+        # サポートされている20個のデータセット（アルファベット順）
+        ALL_DATASETS = [
+            'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+            'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+            'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+            'tournament', 'tpc_h', 'walmart'
+        ]
+        
+        plans_dir = Path(args.plans_dir)
+        
+        # 利用可能なデータセットを確認
+        txt_files = sorted([p for p in plans_dir.glob('*.txt')])
+        available_datasets = set()
+        for p in txt_files:
+            stem = p.stem  # .txtを除いたファイル名
+            parts = stem.split('_')
+            # 最長マッチ: ALL_DATASETSから最長の一致を探す（tpc_hなどアンダースコアを含むデータセット名に対応）
+            matched_dataset = None
+            for i in range(len(parts), 0, -1):
+                candidate = '_'.join(parts[:i])
+                if candidate in ALL_DATASETS:
+                    matched_dataset = candidate
+                    break
+            if matched_dataset:
+                available_datasets.add(matched_dataset)
+        
+        available_datasets = sorted(list(available_datasets))
+        print(f"\n{'='*80}")
+        print(f"Leave-One-Out Validation for All Datasets")
+        print(f"{'='*80}")
+        print(f"利用可能なデータセット: {len(available_datasets)} / {len(ALL_DATASETS)}")
+        print(f"データセット: {', '.join(available_datasets)}")
+        print(f"出力ディレクトリ: {output_dir}")
+        print(f"{'='*80}\n")
+        
+        # 各データセットについて訓練・テストを実行
+        results_summary = []
+        
+        for idx, test_dataset in enumerate(available_datasets, 1):
+            print(f"\n{'#'*80}")
+            print(f"# [{idx}/{len(available_datasets)}] Testing dataset: {test_dataset}")
+            print(f"{'#'*80}\n")
+            
+            try:
+                # データを準備
+                train_plans, test_plans, feature_statistics, column_statistics, database_statistics = \
+                    parse_and_prepare_leave_one_out(
+                        plans_dir=plans_dir,
+                        test_dataset=test_dataset,
+                        no_samples=args.no_samples
+                    )
+                
+                # データセット数の計算
+                train_datasets_set = set()
+                for p in train_plans:
+                    ds = getattr(p, 'dataset', None)
+                    if ds:
+                        train_datasets_set.add(ds)
+                
+                print(f"📊 Leave-One-Out Validation [{idx}/{len(available_datasets)}]:")
+                print(f"  - Training datasets: {len(train_datasets_set)} datasets")
+                print(f"  - Training plans: {len(train_plans)} plans")
+                print(f"  - Test dataset: {test_dataset}")
+                print(f"  - Test plans: {len(test_plans)} plans")
+                print()
+                
+                # データローダーを作成（19個のデータセットをtrain/valに分割）
+                train_loader, val_loader_train, label_norm, feature_statistics = create_simple_dataloader(
+                    plans=train_plans,
+                    feature_statistics=feature_statistics,
+                    column_statistics=column_statistics,
+                    database_statistics=database_statistics,
+                    batch_size=args.batch_size,
+                    val_ratio=args.val_ratio,
+                    shuffle=True,
+                    histogram_bin_size=args.histogram_bin_number,
+                    max_num_filters=args.max_num_filters
+                )
+                
+                print(f"✅ 19個のデータセットから作成:")
+                print(f"  - Train loader: {len(train_loader.dataset)} サンプル")
+                print(f"  - Val loader (from 19 datasets): {len(val_loader_train.dataset)} サンプル")
+                print()
+                
+                # テストローダーを作成（train_multiと同じロジック）
+                from models.query_former.dataloader import encode_query_plan
+                all_features = []
+                all_join_ids = []
+                all_attention_bias = []
+                all_rel_pos = []
+                all_node_heights = []
+                all_labels = []
+                
+                # カラムIDマッピングを作成
+                column_id_mapping = {}
+                partial_column_name_mapping = {}
+                for i, col_stat in enumerate(database_statistics.column_stats):
+                    key = (col_stat.tablename, col_stat.attname)
+                    column_id_mapping[key] = i
+                    cname = col_stat.attname
+                    tname = col_stat.tablename
+                    partial_column_name_mapping.setdefault(cname, set()).add(tname)
+                
+                def dict_to_namespace_recursive(d):
+                    if isinstance(d, dict):
+                        ns = SimpleNamespace()
+                        for k, v in d.items():
+                            if isinstance(v, dict):
+                                setattr(ns, k, dict_to_namespace_recursive(v))
+                            elif isinstance(v, list):
+                                setattr(ns, k, [dict_to_namespace_recursive(item) if isinstance(item, dict) else item for item in v])
+                            else:
+                                setattr(ns, k, v)
+                        return ns
+                    return d
+                
+                def convert_filter_node(filter_node):
+                    if not hasattr(filter_node, 'column'):
+                        return
+                    column = filter_node.column
+                    if column is not None and isinstance(column, (tuple, list)):
+                        if len(column) == 1:
+                            col_name = str(column[0]).strip('"')
+                            import re
+                            col_name_without_suffix = re.sub(r'_\d+$', '', col_name)
+                            mapped = None
+                            for tname in partial_column_name_mapping.get(col_name, set()):
+                                key = (tname, col_name)
+                                if key in column_id_mapping:
+                                    mapped = column_id_mapping[key]
+                                    break
+                            if mapped is None:
+                                for tname in partial_column_name_mapping.get(col_name_without_suffix, set()):
+                                    key = (tname, col_name_without_suffix)
+                                    if key in column_id_mapping:
+                                        mapped = column_id_mapping[key]
+                                        break
+                            filter_node.column = mapped
+                        elif len(column) == 2:
+                            table_name, col_name = column
+                            table_name = str(table_name).strip('"')
+                            col_name = str(col_name).strip('"')
+                            key = (table_name, col_name)
+                            filter_node.column = column_id_mapping.get(key)
+                    literal = filter_node.literal
+                    if literal is not None:
+                        if isinstance(literal, list):
+                            converted_list = []
+                            for item in literal:
+                                if isinstance(item, str) and "'" in item:
+                                    parts = item.split("'")
+                                    if len(parts) >= 2:
+                                        item_value = parts[1]
+                                        try:
+                                            if '.' in item_value:
+                                                converted_list.append(float(item_value))
+                                            else:
+                                                converted_list.append(int(item_value))
+                                        except (ValueError, TypeError):
+                                            converted_list.append(item_value)
+                                    else:
+                                        converted_list.append(item)
+                                else:
+                                    converted_list.append(item)
+                            filter_node.literal = converted_list
+                        elif isinstance(literal, str) and "'" in literal:
+                            parts = literal.split("'")
+                            if len(parts) >= 2:
+                                literal_value = parts[1]
+                                try:
+                                    if '.' in literal_value:
+                                        filter_node.literal = float(literal_value)
+                                    else:
+                                        filter_node.literal = int(literal_value)
+                                except (ValueError, TypeError):
+                                    filter_node.literal = literal_value
+                    if hasattr(filter_node, 'children') and filter_node.children:
+                        for child in filter_node.children:
+                            convert_filter_node(child)
+                
+                def convert_to_namespace(node):
+                    if hasattr(node, 'plan_parameters'):
+                        if isinstance(node.plan_parameters, dict):
+                            node.plan_parameters = dict_to_namespace_recursive(node.plan_parameters)
+                        if hasattr(node.plan_parameters, 'filter_columns') and node.plan_parameters.filter_columns:
+                            convert_filter_node(node.plan_parameters.filter_columns)
+                    if hasattr(node, 'children') and node.children:
+                        for child in node.children:
+                            convert_to_namespace(child)
+                
+                for tp in test_plans:
+                    convert_to_namespace(tp)
+                
+                for i, plan in enumerate(test_plans):
+                    try:
+                        if not hasattr(plan, 'join_conds'):
+                            plan.join_conds = []
+                        if not hasattr(plan, 'database_id'):
+                            plan.database_id = 0
+                        features, join_ids, attention_bias, rel_pos, node_heights = encode_query_plan(
+                            query_index=i,
+                            query_plan=plan,
+                            feature_statistics=feature_statistics,
+                            column_statistics=column_statistics,
+                            database_statistics=database_statistics,
+                            word_embeddings=None,
+                            dim_word_embedding=100,
+                            dim_word_hash=100,
+                            dim_bitmaps=1000,
+                            max_filter_number=args.max_num_filters,
+                            histogram_bin_size=args.histogram_bin_number
+                        )
+                        all_features.append(features)
+                        all_join_ids.append(join_ids)
+                        all_attention_bias.append(attention_bias)
+                        all_rel_pos.append(rel_pos)
+                        all_node_heights.append(node_heights)
+                        label = plan.plan_runtime / 1000 if hasattr(plan, 'plan_runtime') else 1.0
+                        all_labels.append(label)
+                    except Exception as e:
+                        print(f"  警告: テストプラン{i+1}のエンコードに失敗: {e}")
+                        continue
+                
+                assert all_features, f"No test features encoded for {test_dataset}. Aborting."
+                features_tensor = torch.cat(all_features)
+                join_ids_tensor = torch.cat(all_join_ids)
+                attention_bias_tensor = torch.cat(all_attention_bias)
+                rel_pos_tensor = torch.cat(all_rel_pos)
+                node_heights_tensor = torch.cat(all_node_heights)
+                
+                # Test labelsを正規化
+                test_labels_array = np.array(all_labels).reshape(-1, 1)
+                if label_norm is not None:
+                    normalized_test_labels = torch.tensor(
+                        label_norm.transform(np.log1p(test_labels_array)).flatten(),
+                        dtype=torch.float32
+                    )
+                else:
+                    normalized_test_labels = torch.tensor(all_labels, dtype=torch.float32)
+                
+                from torch.utils.data import TensorDataset
+                test_dataset_tensor = TensorDataset(
+                    features_tensor, 
+                    join_ids_tensor, 
+                    attention_bias_tensor, 
+                    rel_pos_tensor, 
+                    node_heights_tensor, 
+                    normalized_test_labels.view(-1, 1)
+                )
+                test_loader = DataLoader(test_dataset_tensor, batch_size=args.batch_size, shuffle=False)
+                
+                print(f"✅ テストデータセット（{test_dataset}）から作成:")
+                print(f"  - Test loader: {len(test_loader.dataset)} サンプル")
+                print()
+                
+                # モデルディレクトリ（各データセットごとに分ける）
+                model_dir = output_dir / f'models_{test_dataset}'
+                
+                # 訓練実行（モデルとテスト結果はmodel_dirに保存されるため、戻り値は使用しない）
+                _ = train_queryformer_trino(
+                    train_loader=train_loader,
+                    val_loader=val_loader_train,
+                    feature_statistics=feature_statistics,
+                    label_norm=label_norm,
+                    config={
+                        'epochs': args.epochs,
+                        'batch_size': args.batch_size,
+                        'learning_rate': args.learning_rate,
+                        'patience': args.patience,
+                        'embedding_size': args.embedding_size,
+                        'histogram_bin_number': args.histogram_bin_number,
+                        'max_num_filters': args.max_num_filters
+                    },
+                    model_dir=model_dir,
+                    device=args.device,
+                    test_loader=test_loader,
+                    save_test_results=True,
+                    test_dataset_name=test_dataset
+                )
+                
+                # 結果を保存（最後のテスト結果を取得）
+                # train_queryformer_trino内でテスト結果が保存されるため、ここではサマリーを記録
+                results_summary.append({
+                    'test_dataset': test_dataset,
+                    'model_dir': str(model_dir),
+                    'status': 'completed'
+                })
+                
+                print(f"✅ [{idx}/{len(available_datasets)}] {test_dataset} の訓練・テスト完了")
+                print(f"   モデル保存先: {model_dir}")
+                print()
+                
+            except Exception as e:
+                print(f"❌ [{idx}/{len(available_datasets)}] {test_dataset} でエラーが発生:")
+                print(f"   {e}")
+                import traceback
+                traceback.print_exc()
+                results_summary.append({
+                    'test_dataset': test_dataset,
+                    'status': 'failed',
+                    'error': str(e)
+                })
+                continue
+        
+        # 全体のサマリーを保存
+        summary_file = output_dir / 'leave_one_out_summary.json'
+        import json
+        with open(summary_file, 'w') as f:
+            json.dump({
+                'total_datasets': len(available_datasets),
+                'completed': len([r for r in results_summary if r['status'] == 'completed']),
+                'failed': len([r for r in results_summary if r['status'] == 'failed']),
+                'results': results_summary
+            }, f, indent=2)
+        
+        print("\n" + "=" * 80)
+        print("🎉 全データセットでのLeave-One-Out Validation完了！")
+        print("=" * 80)
+        print(f"完了: {len([r for r in results_summary if r['status'] == 'completed'])}/{len(available_datasets)}")
+        print(f"失敗: {len([r for r in results_summary if r['status'] == 'failed'])}/{len(available_datasets)}")
+        print(f"サマリーファイル: {summary_file}")
+        print()
+        
         return 0
     
     elif args.mode == 'predict':

@@ -115,54 +115,111 @@ def read_explain_analyze_txt(
     
     # Load database statistics from datasets_statistics directory
     # Try to infer schema name from path
+    # サポートされているデータセット名のリスト（datasets_statisticsディレクトリと一致）
+    supported_datasets = [
+        'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+        'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+        'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+        'tournament', 'tpc_h', 'walmart'
+    ]
+    
     schema_name = None
-    if 'accidents' in str(txt_path).lower():
-        schema_name = 'accidents'
-    elif 'imdb' in str(txt_path).lower():
-        schema_name = 'imdb'
-    # Add more dataset name detection as needed
+    txt_path_lower = str(txt_path).lower()
+    
+    # 全てのデータセット名をチェック
+    for dataset in supported_datasets:
+        if dataset in txt_path_lower:
+            schema_name = dataset
+            break
     
     table_stats_list = []
     column_stats_list = []
     
     if schema_name:
-        # Try to load from datasets_statistics directory
-        stats_dir = Path('datasets_statistics') / f"iceberg_{schema_name}"
-        if stats_dir.exists():
-            table_stats_file = stats_dir / 'table_stats.json'
-            column_stats_file = stats_dir / 'column_stats.json'
-            
-            if table_stats_file.exists() and column_stats_file.exists():
-                print(f"Loading statistics from {stats_dir}")
+        import os
+        # テーブル統計: DATASETS_STATISTICS_DIR環境変数から読み込む（デフォルト: datasets_statistics）
+        # カラム統計: ZERO_SHOT_DATASETS_DIR環境変数から読み込む（デフォルト: zero-shot_datasets）
+        table_stats_base = os.getenv('DATASETS_STATISTICS_DIR', 'datasets_statistics')
+        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', None)
+        
+        # テーブル統計を読み込む
+        table_stats_dir = Path(table_stats_base) / f"iceberg_{schema_name}"
+        table_stats_file = table_stats_dir / 'table_stats.json'
+        table_stats_dict = {}
+        
+        if table_stats_file.exists():
+            try:
+                with open(table_stats_file, 'r') as f:
+                    table_stats_dict = json.load(f)
+                print(f"✅ Loaded table stats from {table_stats_file}")
+            except Exception as e:
+                print(f"⚠️  Failed to load table stats from {table_stats_file}: {e}")
+        
+        # カラム統計を読み込む（優先順位: zero-shot_datasets > datasets_statistics）
+        column_stats_dict = {}
+        if zero_shot_base:
+            # zero-shot_datasetsから読み込み（優先）
+            zero_shot_col_file = Path(zero_shot_base) / schema_name / 'column_statistics.json'
+            if zero_shot_col_file.exists():
                 try:
-                    with open(table_stats_file, 'r') as f:
-                        table_stats_dict = json.load(f)
+                    with open(zero_shot_col_file, 'r') as f:
+                        zero_shot_col_stats = json.load(f)
+                    # zero-shot形式をTrino形式に変換
+                    # zero-shot形式のフィールド名: nan_ratio, num_unique, datatype, min, max, mean, percentiles
+                    # Trino形式のフィールド名: null_frac, avg_width, n_distinct, correlation
+                    for table_name, table_cols in zero_shot_col_stats.items():
+                        for col_name, col_stat in table_cols.items():
+                            key = f"{table_name}.{col_name}"
+                            column_stats_dict[key] = {
+                                'table': table_name,
+                                'column': col_name,
+                                'null_frac': col_stat.get('nan_ratio', col_stat.get('null_frac', 0.0)),
+                                'avg_width': col_stat.get('avg_width', 0),
+                                'n_distinct': col_stat.get('num_unique', col_stat.get('n_distinct', -1)),
+                                'correlation': col_stat.get('correlation', 0)
+                            }
+                    print(f"✅ Loaded column stats from {zero_shot_col_file} ({len(column_stats_dict)} columns)")
+                except Exception as e:
+                    print(f"⚠️  Failed to load column stats from {zero_shot_col_file}: {e}")
+        
+        # zero-shot_datasetsから読み込めなかった場合、datasets_statisticsから読み込む
+        if not column_stats_dict:
+            column_stats_file = table_stats_dir / 'column_stats.json'
+            if column_stats_file.exists():
+                try:
                     with open(column_stats_file, 'r') as f:
                         column_stats_dict = json.load(f)
-                    
-                    # Convert to list format (PostgreSQL compatible)
-                    for table_name, stats in table_stats_dict.items():
-                        table_stats_list.append(SimpleNamespace(
-                            relname=table_name,
-                            reltuples=stats.get('reltuples', stats.get('row_count', 0)),
-                            relpages=stats.get('relpages', 0)
-                        ))
-                    
-                    # Convert column stats to list format
-                    for col_key, stats in column_stats_dict.items():
-                        column_stats_list.append(SimpleNamespace(
-                            tablename=stats.get('table'),
-                            attname=stats.get('column'),
-                            attnum=len(column_stats_list),
-                            null_frac=stats.get('null_frac', 0),
-                            avg_width=stats.get('avg_width', 0),
-                            n_distinct=stats.get('n_distinct', -1),
-                            correlation=stats.get('correlation', 0)
-                        ))
-                    
-                    print(f"Loaded {len(table_stats_list)} table stats and {len(column_stats_list)} column stats")
+                    print(f"✅ Loaded column stats from {column_stats_file} ({len(column_stats_dict)} columns)")
                 except Exception as e:
-                    print(f"Warning: Failed to load statistics: {e}")
+                    print(f"⚠️  Failed to load column stats from {column_stats_file}: {e}")
+        
+        # 統計情報が読み込めた場合のみ処理
+        if table_stats_dict or column_stats_dict:
+            try:
+                    
+                # Convert to list format (PostgreSQL compatible)
+                for table_name, stats in table_stats_dict.items():
+                    table_stats_list.append(SimpleNamespace(
+                        relname=table_name,
+                        reltuples=stats.get('reltuples', stats.get('row_count', 0)),
+                        relpages=stats.get('relpages', 0)
+                    ))
+                
+                # Convert column stats to list format
+                for col_key, stats in column_stats_dict.items():
+                    column_stats_list.append(SimpleNamespace(
+                        tablename=stats.get('table'),
+                        attname=stats.get('column'),
+                        attnum=len(column_stats_list),
+                        null_frac=stats.get('null_frac', 0),
+                        avg_width=stats.get('avg_width', 0),
+                        n_distinct=stats.get('n_distinct', -1),
+                        correlation=stats.get('correlation', 0)
+                    ))
+                
+                print(f"✅ Loaded {len(table_stats_list)} table stats and {len(column_stats_list)} column stats")
+            except Exception as e:
+                print(f"⚠️  Warning: Failed to process statistics: {e}")
     
     # Postgres形式（zero-shotモデル標準形式）でデータベース統計を作成
     # column_stats: {(table, column): SimpleNamespace} 形式

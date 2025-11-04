@@ -77,12 +77,12 @@ class QError(Metric):
         self.min_val = min_val
 
     def evaluate_metric(self, labels=None, preds=None, probs=None):
-        #if not np.all(labels >= self.min_val):
-        #    print("WARNING: some labels are smaller than min_val")
+        # 0除算を防ぐため、min_val以下をクリップ
         preds = np.abs(preds)
-        # preds = np.clip(preds, self.min_val, np.inf)
+        preds = np.clip(preds, self.min_val, np.inf)
+        labels = np.clip(labels, self.min_val, np.inf)
 
         q_errors = np.maximum(labels / preds, preds / labels)
-        q_errors = np.nan_to_num(q_errors, nan=np.inf)
+        q_errors = np.nan_to_num(q_errors, nan=np.inf, posinf=np.inf, neginf=np.inf)
         median_q = np.percentile(q_errors, self.percentile)
         return median_q
