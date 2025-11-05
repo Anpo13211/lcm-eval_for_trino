@@ -25,6 +25,9 @@ def load_database_statistics(
     """
     データベース統計情報を読み込む（zero-shot形式対応）
     
+    注意: この関数はフォールバック用です。通常は統計情報はplan_parametersに含まれており、
+    plan_to_graph()内で自動的に取得されます。外部統計ファイルは補完用途のみです。
+    
     Args:
         catalog: Trinoカタログ名（通常は'iceberg'）
         schema: スキーマ名（データセット名）
@@ -246,7 +249,8 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
                 column_node_id = column_idx.get(column_key)
 
                 if column_node_id is None:
-                    column_stats = lookup_stats(db_column_stats, column, db_real_statistics)
+                    # plan_parametersから統計情報を取得（優先）
+                    column_stats = lookup_stats(db_column_stats, column, db_real_statistics, plan_node=node)
                     column_params = as_dict(column_stats)
 
                     column_feat = []
@@ -277,6 +281,7 @@ def plan_to_graph(node: TrinoPlanOperator, database_id, plan_depths, plan_featur
             logical_preds,
             plan_node_id=current_plan_id,
             db_real_statistics=db_real_statistics,
+            plan_node=node,  # プランノードを渡してplan_parametersから統計情報を取得できるように
         )
     
     # 子ノードを再帰的に処理
@@ -344,7 +349,75 @@ def encode_or_zero(feature_name, params, feature_statistics):
         return 0.0
 
 
-def lookup_stats(stats_container, key, db_statistics=None):
+def lookup_stats_from_plan_parameters(table_name, column_name, plan_node):
+    """
+    プランノードのplan_parametersから統計情報を取得
+    
+    Args:
+        table_name: テーブル名
+        column_name: カラム名
+        plan_node: プランノード（TrinoPlanOperator）
+    
+    Returns:
+        統計情報オブジェクト（SimpleNamespace）またはNone
+    """
+    from types import SimpleNamespace
+    
+    # プランツリーを再帰的に検索して、該当テーブルのノードを探す
+    def find_table_node(node, target_table):
+        if not hasattr(node, 'plan_parameters'):
+            return None
+        
+        params = node.plan_parameters
+        if not isinstance(params, dict):
+            params = vars(params) if hasattr(params, '__dict__') else {}
+        
+        node_table = params.get('table') or params.get('tablename')
+        if node_table == target_table:
+            return node
+        
+        # 子ノードを再帰的に検索
+        if hasattr(node, 'children'):
+            for child in node.children:
+                result = find_table_node(child, target_table)
+                if result:
+                    return result
+        
+        return None
+    
+    # テーブルノードを検索
+    table_node = find_table_node(plan_node, table_name)
+    if not table_node:
+        return None
+    
+    # plan_parametersから統計情報を取得
+    params = table_node.plan_parameters
+    if not isinstance(params, dict):
+        params = vars(params) if hasattr(params, '__dict__') else {}
+    
+    # column_name_n_distinct, column_name_null_frac などを検索
+    n_distinct = params.get(f'{column_name}_n_distinct')
+    null_frac = params.get(f'{column_name}_null_frac')
+    avg_width = params.get(f'{column_name}_avg_width')
+    correlation = params.get(f'{column_name}_correlation')
+    
+    # 統計情報が1つでもあればSimpleNamespaceを作成
+    if n_distinct is not None or null_frac is not None or avg_width is not None or correlation is not None:
+        stats = SimpleNamespace()
+        if n_distinct is not None:
+            stats.n_distinct = n_distinct
+        if null_frac is not None:
+            stats.null_frac = null_frac
+        if avg_width is not None:
+            stats.avg_width = avg_width
+        if correlation is not None:
+            stats.correlation = correlation
+        return stats
+    
+    return None
+
+
+def lookup_stats(stats_container, key, db_statistics=None, plan_node=None):
     """
     統計情報を取得するユーティリティ
     
@@ -352,11 +425,19 @@ def lookup_stats(stats_container, key, db_statistics=None):
         stats_container: Postgres形式の統計情報ソース（{(table, column): SimpleNamespace}）
         key: 検索キー（通常はカラム名のタプル (table, column)）
         db_statistics: データベース統計情報（旧形式の互換性のためのフォールバック）
+        plan_node: プランノード（plan_parametersから統計情報を取得する場合）
     
     Returns:
         統計情報オブジェクト（SimpleNamespace）またはNone
     """
-    # Postgres形式の統計情報から検索（優先）
+    # 優先1: plan_parametersから取得（Trino特有）
+    if plan_node is not None and key is not None and isinstance(key, tuple) and len(key) >= 2:
+        table_name, column_name = key[0], key[1]
+        plan_stats = lookup_stats_from_plan_parameters(table_name, column_name, plan_node)
+        if plan_stats is not None:
+            return plan_stats
+    
+    # 優先2: Postgres形式の統計情報から検索
     if stats_container is not None and key is not None:
         # stats_containerは {(table, column): SimpleNamespace} 形式
         if isinstance(stats_container, dict):
@@ -374,7 +455,6 @@ def lookup_stats(stats_container, key, db_statistics=None):
                 pass
     
     # フォールバック: 旧形式（db_statistics）の互換性
-    # この部分は将来削除される可能性があります
     if db_statistics and 'column_stats' in db_statistics:
         # keyがタプルの場合、table.column形式に変換
         if isinstance(key, tuple) and len(key) >= 1:
@@ -415,7 +495,7 @@ def predicate_to_dict(predicate):
 
 def parse_predicates(db_column_features, feature_statistics, filter_column, filter_to_plan_edges,
                      plan_featurization, predicate_col_features, predicate_depths, intra_predicate_edges,
-                     logical_preds, plan_node_id=None, parent_filter_node_id=None, depth=0, db_real_statistics=None):
+                     logical_preds, plan_node_id=None, parent_filter_node_id=None, depth=0, db_real_statistics=None, plan_node=None):
     """述語ツリーを再帰的に解析して特徴量とエッジを構築する"""
     if filter_column is None:
         return
@@ -435,7 +515,8 @@ def parse_predicates(db_column_features, feature_statistics, filter_column, filt
 
     if not is_logical:
         column_id = filter_params.get('column')
-        column_stats = lookup_stats(db_column_features, column_id, db_real_statistics)
+        # plan_parametersから統計情報を取得（優先）
+        column_stats = lookup_stats(db_column_features, column_id, db_real_statistics, plan_node=plan_node)
         column_params = as_dict(column_stats)
         for feature_name in plan_featurization.COLUMN_FEATURES:
             curr_filter_features.append(encode_or_zero(feature_name, column_params, feature_statistics))
@@ -454,7 +535,7 @@ def parse_predicates(db_column_features, feature_statistics, filter_column, filt
         parse_predicates(db_column_features, feature_statistics, child_dict, filter_to_plan_edges,
                          plan_featurization, predicate_col_features, predicate_depths, intra_predicate_edges,
                          logical_preds, plan_node_id=plan_node_id, parent_filter_node_id=filter_node_id,
-                         depth=depth + 1, db_real_statistics=db_real_statistics)
+                         depth=depth + 1, db_real_statistics=db_real_statistics, plan_node=plan_node)
 
 
 def trino_plan_collator(plans, feature_statistics: dict = None, db_statistics: dict = None,

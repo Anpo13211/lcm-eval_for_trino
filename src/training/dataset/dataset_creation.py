@@ -167,11 +167,13 @@ def read_explain_analyze_txt(
                     # zero-shot形式をTrino形式に変換
                     # zero-shot形式のフィールド名: nan_ratio, num_unique, datatype, min, max, mean, percentiles
                     # Trino形式のフィールド名: null_frac, avg_width, n_distinct, correlation
+                    # テーブル名を小文字に統一
                     for table_name, table_cols in zero_shot_col_stats.items():
+                        table_name_lower = table_name.lower()
                         for col_name, col_stat in table_cols.items():
-                            key = f"{table_name}.{col_name}"
+                            key = f"{table_name_lower}.{col_name}"
                             column_stats_dict[key] = {
-                                'table': table_name,
+                                'table': table_name_lower,  # 小文字に統一
                                 'column': col_name,
                                 'null_frac': col_stat.get('nan_ratio', col_stat.get('null_frac', 0.0)),
                                 'avg_width': col_stat.get('avg_width', 0),
@@ -198,17 +200,23 @@ def read_explain_analyze_txt(
             try:
                     
                 # Convert to list format (PostgreSQL compatible)
+                # テーブル名を小文字に統一
                 for table_name, stats in table_stats_dict.items():
+                    table_name_lower = table_name.lower()
                     table_stats_list.append(SimpleNamespace(
-                        relname=table_name,
+                        relname=table_name_lower,  # 小文字に統一
                         reltuples=stats.get('reltuples', stats.get('row_count', 0)),
                         relpages=stats.get('relpages', 0)
                     ))
                 
                 # Convert column stats to list format
+                # tablenameは既に小文字に統一されている前提
                 for col_key, stats in column_stats_dict.items():
+                    table_name = stats.get('table', '')
+                    # 念のため小文字に統一（既に統一されている場合も含む）
+                    table_name_lower = table_name.lower() if table_name else ''
                     column_stats_list.append(SimpleNamespace(
-                        tablename=stats.get('table'),
+                        tablename=table_name_lower,  # 小文字に統一
                         attname=stats.get('column'),
                         attnum=len(column_stats_list),
                         null_frac=stats.get('null_frac', 0),

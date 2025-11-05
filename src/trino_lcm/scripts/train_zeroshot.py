@@ -29,6 +29,14 @@ for i in range(11):
     if env_value in (None, '', 'None'):
         os.environ[env_key] = '[]'
 
+# ZERO_SHOT_DATASETS_DIR環境変数の設定（column_statistics.jsonから統計情報を取得するため）
+# デフォルトパスを設定（環境変数が既に設定されている場合は上書きしない）
+if 'ZERO_SHOT_DATASETS_DIR' not in os.environ:
+    default_zero_shot_dir = '/Users/an/query_engine/lakehouse/zero-shot_datasets'
+    if os.path.exists(default_zero_shot_dir):
+        os.environ['ZERO_SHOT_DATASETS_DIR'] = default_zero_shot_dir
+        print(f"ℹ️  ZERO_SHOT_DATASETS_DIR を設定しました: {default_zero_shot_dir}")
+
 # スクリプトがsrc/trino_lcm/scripts/にある場合、src/を親パスに追加
 from pathlib import Path
 script_dir = Path(__file__).resolve().parent
@@ -637,6 +645,8 @@ def run(args) -> int:
     print("=" * 80)
     print("Trino Zero-Shot Model Training (統合版)")
     print(f"Mode: {args.mode}")
+    if 'ZERO_SHOT_DATASETS_DIR' in os.environ:
+        print(f"ZERO_SHOT_DATASETS_DIR: {os.environ['ZERO_SHOT_DATASETS_DIR']}")
     print("=" * 80)
     
     # train_multi_allモードの処理
@@ -652,55 +662,8 @@ def run(args) -> int:
     print(f"Output directory: {args.output_dir}")
     print()
     
-    # データベース統計情報を読み込み（オプション）
+    # データベース統計情報の準備（プランから抽出を優先）
     db_statistics = {}
-    if args.catalog and args.schema and args.statistics_dir:
-        stats_dir_path = Path(args.statistics_dir) / f"{args.catalog}_{args.schema}"
-        if stats_dir_path.exists():
-            print("📊 ステップ0: データベース統計情報の読み込み")
-            try:
-                loaded_stats = load_database_statistics(
-                    catalog=args.catalog,
-                    schema=args.schema,
-                    stats_dir=args.statistics_dir,
-                    prefer_zero_shot=True  # zero-shot形式を優先
-                )
-                
-                # Postgres形式に変換（trino_plan_collatorが期待する形式）
-                from types import SimpleNamespace
-                
-                # 統計情報をPostgres形式（database_idをキーとする辞書）に変換
-                for file_idx, file_path in enumerate([Path(p.strip()) for p in args.train_files.split(',')] + [Path(args.test_file)]):
-                    # 各ファイルに対応するdatabase_idで統計情報を設定
-                    # 注意: 現在は全ファイルで同じ統計情報を使用
-                    db_stats = SimpleNamespace(
-                        table_stats=loaded_stats.get('table_stats', {}),
-                        column_stats=loaded_stats.get('column_stats', {})
-                    )
-                    db_statistics[file_idx] = db_stats
-                
-                # 統計情報の有無を確認
-                has_stats = (
-                    loaded_stats.get('table_stats') or 
-                    loaded_stats.get('column_stats')
-                )
-                
-                if has_stats:
-                    print(f"✅ データベース統計情報が利用可能です")
-                    print(f"   - テーブル統計: {len(loaded_stats.get('table_stats', {}))} テーブル")
-                    print(f"   - カラム統計: {len(loaded_stats.get('column_stats', {}))} カラム")
-                print()
-            except Exception as e:
-                print(f"⚠️  統計情報の読み込みでエラーが発生しました: {e}")
-                print(f"   統計情報なしでトレーニングを続行します")
-                print()
-        else:
-            print(f"ℹ️  統計情報ディレクトリが見つかりません: {stats_dir_path}")
-            print(f"   統計情報なしでトレーニングを続行します")
-            print()
-    else:
-        print(f"ℹ️  統計情報が指定されていません。ダミー統計でトレーニングを続行します")
-        print()
     print(f"Epochs: {args.epochs}")
     print(f"Batch size: {args.batch_size}")
     print(f"Learning rate: {args.lr}")
@@ -718,6 +681,46 @@ def run(args) -> int:
     # テストプランの読み込み
     test_plans = load_plans_from_files([test_file_path], args.max_plans_per_file)
     
+    print()
+    
+    # 1.5. データベース統計情報の準備（オプション - フォールバック用）
+    # 注意: 統計情報は既にplan_parametersに含まれているため、通常は外部統計ファイルは不要
+    # ただし、互換性のためフォールバックとして残す
+    db_statistics = {}
+    if args.catalog and args.schema and args.statistics_dir:
+        stats_dir_path = Path(args.statistics_dir) / f"{args.catalog}_{args.schema}"
+        if stats_dir_path.exists():
+            try:
+                loaded_stats = load_database_statistics(
+                    catalog=args.catalog,
+                    schema=args.schema,
+                    stats_dir=args.statistics_dir,
+                    prefer_zero_shot=True
+                )
+                
+                from types import SimpleNamespace
+                for file_idx, file_path in enumerate([Path(p.strip()) for p in args.train_files.split(',')] + [Path(args.test_file)]):
+                    db_stats = SimpleNamespace(
+                        table_stats=loaded_stats.get('table_stats', {}),
+                        column_stats=loaded_stats.get('column_stats', {})
+                    )
+                    db_statistics[file_idx] = db_stats
+                
+                has_stats = (
+                    loaded_stats.get('table_stats') or 
+                    loaded_stats.get('column_stats')
+                )
+                
+                if has_stats:
+                    print(f"ℹ️  外部統計情報を読み込みました（フォールバック用）")
+                    print(f"   - テーブル統計: {len(loaded_stats.get('table_stats', {}))} テーブル")
+                    print(f"   - カラム統計: {len(loaded_stats.get('column_stats', {}))} カラム")
+                    print(f"   注意: 統計情報は既にplan_parametersに含まれているため、外部統計は補完用途です")
+            except Exception as e:
+                print(f"⚠️  外部統計情報の読み込みに失敗（plan_parametersから統計情報を使用）: {e}")
+    
+    if not db_statistics:
+        print(f"ℹ️  統計情報はplan_parametersから自動的に取得されます")
     print()
     
     # 2. トレーニング/検証セットの分割
@@ -1103,7 +1106,8 @@ def run_train_multi_all(args, output_dir: Path) -> int:
                 str(statistics_file) if statistics_file != model_dir / 'feature_statistics.json' else None
             )
             
-            # データベース統計情報（簡略化：テストデータセットの統計を使用）
+            # データベース統計情報（オプション - フォールバック用）
+            # 注意: 統計情報は既にplan_parametersに含まれているため、通常は外部統計ファイルは不要
             db_statistics = {}
             if args.statistics_dir:
                 try:
@@ -1119,8 +1123,9 @@ def run_train_multi_all(args, output_dir: Path) -> int:
                         column_stats=loaded_stats.get('column_stats', {})
                     )
                     db_statistics[0] = db_stats
+                    print(f"ℹ️  外部統計情報を読み込みました（フォールバック用）")
                 except Exception as e:
-                    print(f"⚠️  統計情報の読み込みに失敗: {e}")
+                    print(f"⚠️  外部統計情報の読み込みに失敗（plan_parametersから統計情報を使用）: {e}")
             
             # データセットとDataLoaderの作成
             collate_fn = functools.partial(

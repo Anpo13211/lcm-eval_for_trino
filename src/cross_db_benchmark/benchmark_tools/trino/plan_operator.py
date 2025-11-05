@@ -663,24 +663,133 @@ class TrinoPlanOperator(AbstractPlanOperator):
         if column_stats:
             self._update_params(column_stats)
     
+    def _get_external_column_stats(self, table_name, column_name):
+        """column_statistics.jsonから統計情報を読み込む"""
+        if not table_name or not column_name:
+            return None
+        
+        # Trinoのテーブル名を正規化（例: iceberg:accidents.nesreca$data@... → nesreca）
+        normalized_table_name = self._normalize_trino_table_name(table_name)
+        
+        # サポートされているデータセット名のリスト
+        supported_datasets = [
+            'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+            'consumer', 'credit', 'employee', 'fhnk', 'financial', 'geneea',
+            'genome', 'hepatitis', 'imdb', 'movielens', 'seznam', 'ssb',
+            'tournament', 'tpc_h', 'walmart'
+        ]
+        
+        # テーブル名からスキーマ名を推測
+        schema_name = None
+        table_name_lower = table_name.lower()
+        normalized_table_name_lower = normalized_table_name.lower()
+        
+        for dataset in supported_datasets:
+            if dataset in table_name_lower or dataset in normalized_table_name_lower:
+                schema_name = dataset
+                break
+        
+        if not schema_name:
+            return None
+        
+        # column_statistics.jsonから読み込み
+        try:
+            import json
+            import os
+            from pathlib import Path
+            
+            # ZERO_SHOT_DATASETS_DIR環境変数でパスを指定（必須）
+            stats_base = os.getenv('ZERO_SHOT_DATASETS_DIR')
+            if not stats_base:
+                return None
+            
+            stats_dir = Path(stats_base) / schema_name
+            column_stats_file = stats_dir / 'column_statistics.json'
+            
+            if column_stats_file.exists():
+                with open(column_stats_file, 'r') as f:
+                    column_stats_dict = json.load(f)
+                    
+                # 正規化されたテーブル名で検索
+                if normalized_table_name in column_stats_dict:
+                    table_stats = column_stats_dict[normalized_table_name]
+                    # カラム名で検索（大文字小文字を区別しない）
+                    column_name_lower = column_name.lower()
+                    for col_name, col_stats in table_stats.items():
+                        if col_name.lower() == column_name_lower:
+                            return col_stats
+        except Exception:
+            # 読み込みに失敗した場合はNoneを返す（フォールバックに進む）
+            pass
+        
+        return None
+    
     def _estimate_avg_width(self, column):
         """カラムの平均幅を推定"""
-        # Trino の方でまだ未実装のため、一旦0を返す
+        # column_statistics.jsonから取得を試みる
+        table_name = self._get_param('table', '')
+        column_name = column.split(':')[0] if ':' in column else column
+        
+        col_stats = self._get_external_column_stats(table_name, column_name)
+        if col_stats:
+            # datatypeから平均幅を推定
+            datatype = col_stats.get('datatype', '')
+            if datatype in ['int', 'integer', 'bigint', 'smallint', 'tinyint']:
+                return 8  # 整数型は8バイト
+            elif datatype in ['float', 'double', 'real']:
+                return 8  # 浮動小数点型は8バイト
+            elif datatype == 'categorical':
+                # 一意の値のリストから平均幅を推定
+                unique_vals = col_stats.get('unique_vals', [])
+                if unique_vals:
+                    avg_len = sum(len(str(v)) for v in unique_vals[:100]) / min(len(unique_vals), 100)
+                    return int(avg_len)
+                return 0
+            elif 'varchar' in datatype or 'char' in datatype:
+                # 文字列型の場合、一意の値のリストから平均幅を推定
+                unique_vals = col_stats.get('unique_vals', [])
+                if unique_vals:
+                    avg_len = sum(len(str(v)) for v in unique_vals[:100]) / min(len(unique_vals), 100)
+                    return int(avg_len)
+                return 0
+        
+        # フォールバック: 0を返す
         return 0
     
     def _estimate_correlation(self, column):
         """カラムの相関を推定"""
-        # Trino の方でまだ未実装のため、一旦0を返す
+        # 相関は複数のカラム間の関係なので、単一カラムの統計からは取得できない
+        # 将来的に複数カラムの相関情報が利用可能になった場合に実装
         return 0
     
     def _estimate_n_distinct(self, column):
         """カラムの異なる値の数を推定"""
-        # Trino の方でまだ未実装のため、一旦0を返す
+        # column_statistics.jsonから取得を試みる
+        table_name = self._get_param('table', '')
+        column_name = column.split(':')[0] if ':' in column else column
+        
+        col_stats = self._get_external_column_stats(table_name, column_name)
+        if col_stats:
+            num_unique = col_stats.get('num_unique')
+            if num_unique is not None:
+                return int(num_unique)
+        
+        # フォールバック: 0を返す
         return 0
     
     def _estimate_null_frac(self, column):
         """カラムのNULL値の割合を推定"""
-        # Trino の方でまだ未実装のため、一旦0を返す
+        # column_statistics.jsonから取得を試みる
+        table_name = self._get_param('table', '')
+        column_name = column.split(':')[0] if ':' in column else column
+        
+        col_stats = self._get_external_column_stats(table_name, column_name)
+        if col_stats:
+            nan_ratio = col_stats.get('nan_ratio')
+            if nan_ratio is not None:
+                return float(nan_ratio)
+        
+        # フォールバック: 0を返す
         return 0
     
     def _parse_size(self, size_str):

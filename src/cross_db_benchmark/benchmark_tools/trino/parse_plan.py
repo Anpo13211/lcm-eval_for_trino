@@ -847,6 +847,7 @@ def parse_trino_plans_v2(run_stats, min_runtime=100, max_runtime=30000, parse_ba
     database_stats = run_stats.database_stats
     
     # テーブルサイズ情報をカラム統計に追加
+    # テーブル名は既に小文字に統一されている前提
     table_sizes = dict()
     for table_stat in database_stats.table_stats:
         table_sizes[table_stat.relname] = table_stat.reltuples
@@ -854,7 +855,8 @@ def parse_trino_plans_v2(run_stats, min_runtime=100, max_runtime=30000, parse_ba
     for i, column_stat in enumerate(database_stats.column_stats):
         table = column_stat.tablename
         column = column_stat.attname
-        column_stat.table_size = table_sizes[table]
+        # テーブル名は既に小文字に統一されている前提
+        column_stat.table_size = table_sizes.get(table, 0)
         column_id_mapping[(table, column)] = i
         partial_column_name_mapping[column].add(table)
     

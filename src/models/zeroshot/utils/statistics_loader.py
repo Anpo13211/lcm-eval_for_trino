@@ -60,14 +60,16 @@ def convert_zero_shot_to_postgres_format(zero_shot_stats: Dict, zero_shot_table_
     table_stats = {}
     
     # カラム統計の変換
+    # テーブル名を小文字に統一
     for table_name, table_cols in zero_shot_stats.items():
+        table_name_lower = table_name.lower()
         for col_name, col_stats in table_cols.items():
-            key = (table_name, col_name)
+            key = (table_name_lower, col_name)
             
             # zero-shot形式からPostgres形式に変換
             # zero-shot形式のフィールドをPostgres形式のフィールドにマッピング
             column_stats[key] = SimpleNamespace(
-                tablename=table_name,
+                tablename=table_name_lower,  # 小文字に統一
                 attname=col_name,
                 # zero-shot形式の統計情報をPostgres形式にマッピング
                 null_frac=col_stats.get('nan_ratio', 0.0),
@@ -85,10 +87,12 @@ def convert_zero_shot_to_postgres_format(zero_shot_stats: Dict, zero_shot_table_
             )
     
     # テーブル統計の変換
+    # テーブル名を小文字に統一
     if zero_shot_table_stats:
         for table_name, table_stat in zero_shot_table_stats.items():
-            table_stats[table_name] = SimpleNamespace(
-                relname=table_name,
+            table_name_lower = table_name.lower()
+            table_stats[table_name_lower] = SimpleNamespace(
+                relname=table_name_lower,  # 小文字に統一
                 reltuples=table_stat.get('row_count', table_stat.get('reltuples', 0)),
                 relpages=table_stat.get('relpages', 0)
             )
@@ -152,6 +156,7 @@ def load_database_statistics_for_zeroshot(
             trino_table_stats = json.load(f)
         
         # Trino形式（{table.column: {stats}}）をPostgres形式に変換
+        # テーブル名を小文字に統一
         column_stats = {}
         for col_key, col_stat in trino_col_stats.items():
             # table.column形式をパース
@@ -162,9 +167,11 @@ def load_database_statistics_for_zeroshot(
                 table_name = col_stat.get('table', 'unknown')
                 col_name = col_stat.get('column', col_key)
             
-            key = (table_name, col_name)
+            # テーブル名を小文字に統一
+            table_name_lower = table_name.lower()
+            key = (table_name_lower, col_name)
             column_stats[key] = SimpleNamespace(
-                tablename=table_name,
+                tablename=table_name_lower,  # 小文字に統一
                 attname=col_name,
                 null_frac=col_stat.get('null_frac', 0.0),
                 avg_width=col_stat.get('avg_width', 0),
@@ -175,8 +182,10 @@ def load_database_statistics_for_zeroshot(
         
         table_stats = {}
         for table_name, table_stat in trino_table_stats.items():
-            table_stats[table_name] = SimpleNamespace(
-                relname=table_name,
+            # テーブル名を小文字に統一
+            table_name_lower = table_name.lower()
+            table_stats[table_name_lower] = SimpleNamespace(
+                relname=table_name_lower,  # 小文字に統一
                 reltuples=table_stat.get('row_count', table_stat.get('reltuples', 0)),
                 relpages=table_stat.get('relpages', 0)
             )
