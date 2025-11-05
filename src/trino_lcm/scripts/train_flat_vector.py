@@ -403,6 +403,16 @@ def run_train_multi_all(args, output_dir: Path) -> int:
         max_plans_per_file=args.max_plans_per_file
     )
     
+    # 全データセットから演算子タイプを事前に収集（未知の演算子タイプを避けるため）
+    print(f"\n{'='*80}")
+    print("📊 全データセットから演算子タイプを収集中...")
+    print(f"{'='*80}")
+    all_plans = []
+    for plans in all_plans_by_dataset.values():
+        all_plans.extend(plans)
+    global_op_idx_dict = collect_operator_types(all_plans)
+    print()
+    
     # 各データセットについて訓練・テストを実行
     results_summary = []
     
@@ -449,8 +459,8 @@ def run_train_multi_all(args, output_dir: Path) -> int:
             print(f"  - Test plans: {len(test_plans)}")
             print()
             
-            # 演算子タイプの収集（訓練データから）
-            op_idx_dict = collect_operator_types(train_plans)
+            # 演算子タイプの辞書は全データセットから事前に収集したものを使用
+            op_idx_dict = global_op_idx_dict
             
             # トレーニング/検証セットの分割（19個のデータセットをtrain/valに分割）
             val_size = int(len(train_plans) * args.val_ratio)

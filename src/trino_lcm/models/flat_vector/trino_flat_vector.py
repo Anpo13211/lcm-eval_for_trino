@@ -37,10 +37,20 @@ class MockQuery:
         execution_time = None
         timing_match = trino_timing_regex.search(plan_text)
         if timing_match:
-            execution_time = float(timing_match.group(4))
-            execution_unit = timing_match.group(5)
+            # Group 1: Queued値, Group 2: Queued単位
+            # Group 3: Analysis値, Group 4: Analysis単位
+            # Group 5: Planning値, Group 6: Planning単位
+            # Group 7: Execution値, Group 8: Execution単位
+            execution_value = float(timing_match.group(7))
+            execution_unit = timing_match.group(8) or 'ms'
             if execution_unit == 's':
-                execution_time *= 1000
+                execution_time = execution_value * 1000  # s to ms
+            elif execution_unit == 'm':
+                execution_time = execution_value * 60000  # m to ms
+            elif execution_unit in ('us', 'μs'):
+                execution_time = execution_value / 1000  # us/μs to ms
+            else:
+                execution_time = execution_value  # ms
         
         if execution_time is None:
             execution_time_match = re.search(r'Execution(?: Time)?: ([\d.]+)(ms|s)', plan_text)

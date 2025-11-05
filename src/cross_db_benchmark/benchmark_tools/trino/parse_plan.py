@@ -16,8 +16,8 @@ from cross_db_benchmark.benchmark_tools.trino.plan_operator import TrinoPlanOper
 from cross_db_benchmark.benchmark_tools.trino.utils import plan_statistics
 
 # Trino特有の正規表現パターン
-# Queuedの単位はus/μs/msのいずれか、Executionの単位はms/s/m/us/μsのいずれか
-trino_timing_regex = re.compile(r'Queued: ([\d.]+)(?:us|μs|ms)?, Analysis: ([\d.]+)ms, Planning: ([\d.]+)ms, Execution: ([\d.]+)(ms|s|m|us|μs)?')
+# Queuedの単位はus/μs/msのいずれか、Analysis/Planning/Executionの単位はms/s/m/us/μsのいずれか
+trino_timing_regex = re.compile(r'Queued: ([\d.]+)(us|μs|ms)?, Analysis: ([\d.]+)(ms|s|m|us|μs)?, Planning: ([\d.]+)(ms|s|m|us|μs)?, Execution: ([\d.]+)(ms|s|m|us|μs)?')
 trino_fragment_regex = re.compile(r'Fragment (\d+) \[(\w+)\]')
 trino_cpu_regex = re.compile(r'CPU: ([\d.]+)ms')
 trino_scheduled_regex = re.compile(r'Scheduled: ([\d.]+)ms')
@@ -261,27 +261,49 @@ def parse_trino_plan_simple(plan_text):
     for line in lines:
         timing_match = trino_timing_regex.search(line)
         if timing_match:
+            # Group 1: Queued値, Group 2: Queued単位
             queued_value = float(timing_match.group(1))
-            # Queuedの単位を確認（正規表現ではキャプチャしていないので、msかus/μsかを判定）
-            queued_str = timing_match.group(0)
-            if 'ms' in queued_str:
-                queued_time = queued_value  # ms
-            else:
+            queued_unit = timing_match.group(2) or 'ms'
+            if queued_unit in ('us', 'μs'):
                 queued_time = queued_value / 1000  # us/μs to ms
+            else:
+                queued_time = queued_value  # ms
             
-            analysis_time = float(timing_match.group(2))
-            planning_time = float(timing_match.group(3))
-            execution_time = float(timing_match.group(4))
-            execution_unit = timing_match.group(5) if timing_match.group(5) else 'ms'
+            # Group 3: Analysis値, Group 4: Analysis単位
+            analysis_value = float(timing_match.group(3))
+            analysis_unit = timing_match.group(4) or 'ms'
+            if analysis_unit == 's':
+                analysis_time = analysis_value * 1000  # s to ms
+            elif analysis_unit == 'm':
+                analysis_time = analysis_value * 60000  # m to ms
+            elif analysis_unit in ('us', 'μs'):
+                analysis_time = analysis_value / 1000  # us/μs to ms
+            else:
+                analysis_time = analysis_value  # ms
             
-            # 実行時間の単位をミリ秒に統一
+            # Group 5: Planning値, Group 6: Planning単位
+            planning_value = float(timing_match.group(5))
+            planning_unit = timing_match.group(6) or 'ms'
+            if planning_unit == 's':
+                planning_time = planning_value * 1000  # s to ms
+            elif planning_unit == 'm':
+                planning_time = planning_value * 60000  # m to ms
+            elif planning_unit in ('us', 'μs'):
+                planning_time = planning_value / 1000  # us/μs to ms
+            else:
+                planning_time = planning_value  # ms
+            
+            # Group 7: Execution値, Group 8: Execution単位
+            execution_value = float(timing_match.group(7))
+            execution_unit = timing_match.group(8) or 'ms'
             if execution_unit == 's':
-                execution_time = execution_time * 1000  # s to ms
+                execution_time = execution_value * 1000  # s to ms
             elif execution_unit == 'm':
-                execution_time = execution_time * 60000  # m to ms
+                execution_time = execution_value * 60000  # m to ms
             elif execution_unit in ('us', 'μs'):
-                execution_time = execution_time / 1000  # us/μs to ms
-            # execution_unit == 'ms' の場合はそのまま
+                execution_time = execution_value / 1000  # us/μs to ms
+            else:
+                execution_time = execution_value  # ms
             
             break
     
@@ -394,6 +416,12 @@ def is_operator_line(line):
         if line.startswith(pattern):
             return False
     
+    # 行から先頭の空白と│（パイプ）文字を除去してから判定
+    stripped = line.strip()
+    # │で始まる場合は除去
+    if stripped.startswith('│'):
+        stripped = stripped[1:].strip()
+    
     # 演算子のパターンを検出
     operator_patterns = [
         r'^\w+\[',  # Aggregate[type = FINAL]
@@ -404,7 +432,7 @@ def is_operator_line(line):
     ]
     
     for pattern in operator_patterns:
-        if re.match(pattern, line):
+        if re.match(pattern, stripped):
             return True
     
     return False
@@ -413,7 +441,10 @@ def is_operator_line(line):
 def extract_operator_name(line):
     """行から演算子名を抽出"""
     # 行をクリーンアップ
-    line = line.strip()
+    stripped = line.strip()
+    # │で始まる場合は除去
+    if stripped.startswith('│'):
+        stripped = stripped[1:].strip()
     
     # 演算子名のパターンを検出
     patterns = [
@@ -425,7 +456,7 @@ def extract_operator_name(line):
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, line)
+        match = re.search(pattern, stripped)
         if match:
             return match.group(1)
     
@@ -435,17 +466,19 @@ def extract_operator_name(line):
 def count_indent_depth(line):
     """行のインデント深度を計算"""
     # スペースとタブのインデントを計算
-    space_indent = len(line) - len(line.lstrip())
+    # │（パイプ）文字はインデントとして扱わない（視覚的な接続線のため）
+    line_without_pipe = line.replace('│', ' ')
+    space_indent = len(line_without_pipe) - len(line_without_pipe.lstrip())
     
-    # Trinoの階層記号（└─, ├─）を考慮
-    if '└─' in line:
-        # └─ は子ノードを示す（親より1レベル深い）
-        return space_indent + 1
-    elif '├─' in line:
-        # ├─ は兄弟ノードを示す（同じレベル）
+    # Trinoの階層記号（└─, ├─）は同じレベルを示す
+    # 実際のdepthはインデント（スペース数）で決まる
+    # └─ や ├─ の前のスペース数を基準にする
+    stripped = line_without_pipe.lstrip()
+    if stripped.startswith('└─') or stripped.startswith('├─'):
+        # 記号の前のスペース数がdepth
         return space_indent
     else:
-        # 通常のインデント
+        # 通常のインデント（記号なし）
         return space_indent
 
 
@@ -696,12 +729,13 @@ def build_hierarchy(operators, all_fragment_operators=None):
     # 子ノードを再帰的に構築
     build_children(root_operator, operators, 1, operators[0]['depth'])
     
+    # 演算子の詳細解析（先にパースしてからFragmentを統合）
+    root_operator.parse_lines_recursively()
+    
     # 全Fragmentの演算子を統合（テーブル情報を含む）
+    # parse_lines_recursively()の後に実行することで、RemoteSourceが正しく検出される
     if all_fragment_operators:
         integrate_all_fragments(root_operator, all_fragment_operators)
-    
-    # 演算子の詳細解析
-    root_operator.parse_lines_recursively()
     
     # 子ノードのカーディナリティを計算とoutput_columnsの生成（Trino用に簡略化）
     # 注: この処理は plan_parameters が辞書形式のままで実行される
@@ -773,14 +807,60 @@ def integrate_all_fragments(root_operator, all_fragment_operators):
         再帰的にRemoteSourceを探し、sourceFragmentIdsで参照されている
         Fragmentの演算子を子として接続する
         """
-        op_name = getattr(node.plan_parameters, 'op_name', '')
+        # op_nameを複数の方法で取得
+        op_name = None
+        
+        # 1. plan_parametersから取得
+        if hasattr(node, 'plan_parameters'):
+            if hasattr(node.plan_parameters, 'op_name'):
+                op_name = node.plan_parameters.op_name
+            elif isinstance(node.plan_parameters, dict):
+                op_name = node.plan_parameters.get('op_name', '')
+        
+        # 2. plain_contentから取得（op_nameが設定されていない場合）
+        if not op_name and hasattr(node, 'plain_content') and node.plain_content:
+            first_line = node.plain_content[0] if node.plain_content else ''
+            # RemoteSourceの行を検出
+            if 'RemoteSource' in first_line:
+                op_name = 'RemoteSource'
         
         if op_name == 'RemoteSource':
+            # 既に子ノードが存在する場合はスキップ（重複を避ける）
+            if node.children:
+                # 既存の子ノードも再帰的に処理
+                for child in list(node.children):
+                    attach_fragments_to_remote_sources(child)
+                return
+            
             # sourceFragmentIds を抽出
             source_fragment_ids = []
             # TrinoPlanOperatorでは lines は plain_content として保存される
+            # 複数の場所からsourceFragmentIdsを抽出を試みる
+            content_to_search = []
+            
+            # 1. plain_contentから抽出
             if hasattr(node, 'plain_content') and node.plain_content:
-                for line in node.plain_content:
+                content_to_search.extend(node.plain_content)
+            
+            # 2. plan_parametersから抽出（既にパースされている場合）
+            if hasattr(node, 'plan_parameters'):
+                if hasattr(node.plan_parameters, 'sourceFragmentIds'):
+                    source_fragment_ids = node.plan_parameters.sourceFragmentIds
+                    if isinstance(source_fragment_ids, list):
+                        source_fragment_ids = [str(fid) for fid in source_fragment_ids]
+                    else:
+                        source_fragment_ids = [str(source_fragment_ids)]
+                elif isinstance(node.plan_parameters, dict):
+                    if 'sourceFragmentIds' in node.plan_parameters:
+                        source_fragment_ids = node.plan_parameters['sourceFragmentIds']
+                        if isinstance(source_fragment_ids, list):
+                            source_fragment_ids = [str(fid) for fid in source_fragment_ids]
+                        else:
+                            source_fragment_ids = [str(source_fragment_ids)]
+            
+            # 3. plain_contentから正規表現で抽出（上記で見つからなかった場合）
+            if not source_fragment_ids and content_to_search:
+                for line in content_to_search:
                     match = re.search(r'sourceFragmentIds\s*=\s*\[([^\]]+)\]', line)
                     if match:
                         # "2" or "3, 4" のような形式
@@ -795,18 +875,32 @@ def integrate_all_fragments(root_operator, all_fragment_operators):
                     frag_ops = fragment_operators[frag_id]
                     if frag_ops:
                         # Fragment のルート演算子を作成（最初の演算子）
+                        # operator_infoにはfragment_idが含まれているはず
                         frag_root = create_trino_plan_operator(frag_ops[0])
+                        
+                        # fragment_idが正しく設定されているか確認して、設定されていない場合は手動で設定
+                        if hasattr(frag_root, 'plan_parameters'):
+                            from types import SimpleNamespace
+                            if isinstance(frag_root.plan_parameters, dict):
+                                if 'fragment_id' not in frag_root.plan_parameters:
+                                    frag_root.plan_parameters['fragment_id'] = frag_id
+                            elif isinstance(frag_root.plan_parameters, SimpleNamespace):
+                                if not hasattr(frag_root.plan_parameters, 'fragment_id'):
+                                    setattr(frag_root.plan_parameters, 'fragment_id', frag_id)
                         
                         # Fragment 内の子ノードを再帰的に構築
                         if len(frag_ops) > 1:
                             build_children(frag_root, frag_ops, 1, frag_ops[0]['depth'])
                         
-                        # RemoteSource の子として追加
-                        node.children.append(frag_root)
+                        # Fragment の演算子を詳細解析（plain_contentを設定）
+                        frag_root.parse_lines_recursively()
                         
                         # Fragment の演算子を処理済みとしてマーク（重複を避ける）
-                        # この Fragment に含まれる RemoteSource も再帰的に処理
+                        # この Fragment に含まれる RemoteSource も再帰的に処理（追加前に処理）
                         attach_fragments_to_remote_sources(frag_root)
+                        
+                        # RemoteSource の子として追加（処理後に追加）
+                        node.children.append(frag_root)
         
         # 既存の子ノードも再帰的に処理
         for child in list(node.children):  # list() でコピーして、追加中の変更を避ける
@@ -822,15 +916,33 @@ def build_children(parent, operators, start_idx, parent_depth):
     while i < len(operators):
         operator = operators[i]
         
-        # 親より深い演算子は子ノード
-        if operator['depth'] > parent_depth:
-            child = create_trino_plan_operator(operator)
-            parent.children.append(child)
-            
-            # 子ノードの子を再帰的に構築
-            i = build_children(child, operators, i + 1, operator['depth'])
+        # 親より深い演算子、または同じ深度の演算子（Trinoでは同じ深度も子として扱う）は子ノード
+        # ただし、親より浅い深度の演算子は兄弟ノードなのでbreak
+        if operator['depth'] >= parent_depth:
+            # 同じ深度または深い深度の演算子は子ノード
+            if operator['depth'] > parent_depth:
+                # 深い深度：確実に子ノード
+                child = create_trino_plan_operator(operator)
+                parent.children.append(child)
+                
+                # 子ノードの子を再帰的に構築
+                i = build_children(child, operators, i + 1, operator['depth'])
+            elif operator['depth'] == parent_depth:
+                # 同じ深度：Trinoでは同じ深度も子として扱う（例：CrossJoinの子としてScanFilterProjectとLocalExchange）
+                # ただし、最初の演算子（親自身）は除外
+                if i > start_idx:  # 親自身でない場合のみ
+                    child = create_trino_plan_operator(operator)
+                    parent.children.append(child)
+                    
+                    # 子ノードの子を再帰的に構築
+                    i = build_children(child, operators, i + 1, operator['depth'])
+                else:
+                    i += 1
+            else:
+                # 浅い深度：兄弟ノードなのでbreak
+                break
         else:
-            # 同じ深度または浅い深度の演算子は兄弟ノード
+            # 親より浅い深度の演算子は兄弟ノード
             break
     
     return i

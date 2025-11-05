@@ -1666,9 +1666,10 @@ def run(args) -> int:
                     if ds != test_dataset:
                         train_plans.extend(plans)
                 
-                # feature_statisticsを訓練データから生成
-                train_plans_dict = [plan_to_dict(p) for p in train_plans]
-                feature_statistics = build_feature_statistics(train_plans_dict, train_plans)
+                # feature_statisticsを全データセット（訓練+テスト）から生成（未知の演算子タイプを避けるため）
+                all_plans_for_stats = train_plans + test_plans
+                all_plans_dict = [plan_to_dict(p) for p in all_plans_for_stats]
+                feature_statistics = build_feature_statistics(all_plans_dict, all_plans_for_stats)
                 
                 # column_statisticsとdatabase_statisticsは既に読み込まれている
                 column_statistics = all_column_statistics
