@@ -1,4 +1,8 @@
+# Virtual environments
 .venv
+venv/
+env/
+ENV/
 
 # Trino specific files
 trino_table_stats.json
@@ -7,6 +11,9 @@ accidents_valid_verbose.txt
 
 # Database statistics
 datasets_statistics/
+
+# Data files
+data/
 
 # Python cache files
 __pycache__/
@@ -20,6 +27,7 @@ __pycache__/
 /models/
 *.pt
 *.pth
+*.model
 
 # Environment files
 .env
@@ -49,3 +57,13 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+
+# Documentation files
+*.md
+!README.md
+
+# Test files
+tests/
+src/tests/
+*.test.py
+*_test.py

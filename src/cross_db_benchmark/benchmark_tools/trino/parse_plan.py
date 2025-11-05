@@ -739,13 +739,17 @@ def build_hierarchy(operators, all_fragment_operators=None):
     
     # 子ノードのカーディナリティを計算とoutput_columnsの生成（Trino用に簡略化）
     # 注: この処理は plan_parameters が辞書形式のままで実行される
+    parse_columns_success = False
     try:
         root_operator.parse_columns_bottom_up({}, {}, {}, alias_dict={}, table_samples=None, col_stats=None)
+        parse_columns_success = True
     except (KeyError, ValueError) as e:
         # Trinoの複雑なカラム名に対応するため、エラーを無視してoutput_columnsのみ生成
         print(f"⚠️  parse_columns_bottom_upでエラー（無視）: {e}")
-        # 手動でoutput_columnsを生成（この時点ではまだ辞書形式）
-        # generate_output_columns_manually(root_operator)
+    
+    # parse_columns_bottom_upが成功してもoutput_columnsが空の場合があるため、常に手動生成を試みる
+    # 手動でoutput_columnsを生成（この時点ではまだ辞書形式）
+    generate_output_columns_manually(root_operator)
     
     # 全ての処理が完了した後、plan_parametersをSimpleNamespaceに変換
     # これにより、PostgreSQLと統一されたアクセス方法が可能になる
@@ -755,19 +759,50 @@ def build_hierarchy(operators, all_fragment_operators=None):
 
 
 def generate_output_columns_manually(node, is_root=True):
-    """手動でoutput_columnsを生成（Trino用）- ルートノードのみ"""
-    # ルートノードのみでoutput_columnsを生成（中間演算子の複雑なカラム名を避ける）
-    if is_root:
-        # plan_parametersがSimpleNamespaceの場合は hasattr を使用
-        if hasattr(node.plan_parameters, 'layout'):
-            layout = node.plan_parameters.layout
-            if layout:
-                try:
-                    output_columns = node.parse_output_columns(','.join(layout))
-                    # SimpleNamespaceは動的に属性を追加できる
-                    node.plan_parameters.output_columns = output_columns
-                except Exception as e:
-                    print(f"⚠️  output_columns生成でエラー（無視）: {e}")
+    """
+    手動でoutput_columnsを生成（Trino用）- 全ノードで実行
+    
+    Note: Trinoでは各ノードのLayoutが異なる意味を持つ：
+    1. ルートノードのLayout: クエリの最終SELECT句
+    2. 中間ノードのLayout: その演算子が出力するカラム（中間結果）
+    
+    機械学習モデルは両方の情報を使うため、全ノードでoutput_columnsを生成します。
+    ただし、is_final_output フラグで区別できるようにします。
+    
+    Args:
+        node: Plan operator node
+        is_root: True if this is the root node (query's final output)
+    """
+    # plan_parametersがdictかSimpleNamespaceか判定
+    params = node.plan_parameters
+    
+    # layoutを取得（dictとSimpleNamespace両対応）
+    layout = None
+    if isinstance(params, dict):
+        layout = params.get('layout')
+    elif hasattr(params, 'layout'):
+        layout = params.layout
+    
+    if layout and len(layout) > 0 and layout != ['']:
+        try:
+            # layoutからoutput_columnsを生成
+            output_columns = node.parse_output_columns(','.join(layout))
+            
+            # plan_parametersに設定（dictとSimpleNamespace両対応）
+            if isinstance(params, dict):
+                params['output_columns'] = output_columns
+                # フラグを追加: これが最終出力かどうか
+                params['is_final_output'] = is_root
+            else:
+                params.output_columns = output_columns
+                params.is_final_output = is_root
+            
+            # Debug出力（簡略化）
+            # if is_root or len(output_columns) > 0:
+            #     op_name = params.get('op_name', 'Unknown') if isinstance(params, dict) else getattr(params, 'op_name', 'Unknown')
+            #     print(f"✓ Generated {len(output_columns)} output_columns for {op_name} {'(FINAL OUTPUT)' if is_root else ''}")
+        except Exception as e:
+            print(f"⚠️  output_columns生成でエラー（無視）: {e}")
     
     # 子ノードも再帰的に処理（is_root=False）
     for child in node.children:
@@ -911,38 +946,39 @@ def integrate_all_fragments(root_operator, all_fragment_operators):
 
 
 def build_children(parent, operators, start_idx, parent_depth):
-    """子ノードを再帰的に構築"""
+    """
+    子ノードを再帰的に構築
+    
+    Trinoのインデント構造に基づいて階層を決定します：
+    - depth > parent_depth: 確実に子ノード
+    - depth == parent_depth: 状況による（同じ深度の兄弟演算子）
+    - depth < parent_depth: 親レベルに戻る
+    """
     i = start_idx
     while i < len(operators):
         operator = operators[i]
         
-        # 親より深い演算子、または同じ深度の演算子（Trinoでは同じ深度も子として扱う）は子ノード
-        # ただし、親より浅い深度の演算子は兄弟ノードなのでbreak
-        if operator['depth'] >= parent_depth:
-            # 同じ深度または深い深度の演算子は子ノード
-            if operator['depth'] > parent_depth:
-                # 深い深度：確実に子ノード
-                child = create_trino_plan_operator(operator)
-                parent.children.append(child)
-                
-                # 子ノードの子を再帰的に構築
-                i = build_children(child, operators, i + 1, operator['depth'])
-            elif operator['depth'] == parent_depth:
-                # 同じ深度：Trinoでは同じ深度も子として扱う（例：CrossJoinの子としてScanFilterProjectとLocalExchange）
-                # ただし、最初の演算子（親自身）は除外
-                if i > start_idx:  # 親自身でない場合のみ
-                    child = create_trino_plan_operator(operator)
-                    parent.children.append(child)
-                    
-                    # 子ノードの子を再帰的に構築
-                    i = build_children(child, operators, i + 1, operator['depth'])
-                else:
-                    i += 1
-            else:
-                # 浅い深度：兄弟ノードなのでbreak
-                break
+        if operator['depth'] > parent_depth:
+            # 深い深度：確実に子ノード
+            child = create_trino_plan_operator(operator)
+            parent.children.append(child)
+            
+            # 子ノードの子を再帰的に構築
+            i = build_children(child, operators, i + 1, operator['depth'])
+            
+        elif operator['depth'] == parent_depth:
+            # 同じ深度：Trinoでは `└─` 表記で同じインデントでも親子関係を示す
+            # 例: Aggregate (depth=4) と ScanFilterProject (depth=4) は親子関係
+            
+            # 親の後に続く同じ深度の演算子を子ノードとして扱う
+            child = create_trino_plan_operator(operator)
+            parent.children.append(child)
+            
+            # この子ノードの子を再帰的に構築
+            i = build_children(child, operators, i + 1, operator['depth'])
+            
         else:
-            # 親より浅い深度の演算子は兄弟ノード
+            # 浅い深度：親レベルに戻る
             break
     
     return i
