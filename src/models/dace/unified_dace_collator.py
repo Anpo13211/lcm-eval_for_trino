@@ -43,6 +43,7 @@ def unified_dace_collator(
     
     for sample_idx, plan in batch:
         sample_idxs.append(sample_idx)
+        # plan_runtime is already in milliseconds, convert to seconds
         labels.append(plan.plan_runtime / 1000)
         
         # Extract sequence with masks (4つの値を返す)
@@ -61,12 +62,16 @@ def unified_dace_collator(
     
     # Stack to tensors
     seq_encodings = torch.stack(seq_encodings)
-    attention_masks = torch.stack(attention_masks)
+    # Attention masks: TransformerEncoder expects (seq_len, seq_len) for all batches
+    # Since all samples use the same pad_length, we can use the first mask for all
+    # Note: This assumes all masks are identical due to padding structure
+    # For per-sample masks, we would need to modify the model's forward pass
+    attention_mask = attention_masks[0] if attention_masks else None
     loss_masks = torch.stack(loss_masks)
     run_times_tensor = torch.stack(run_times_list)
     labels = torch.tensor(labels, dtype=torch.float32)
     
-    return seq_encodings, attention_masks, loss_masks, run_times_tensor, labels, sample_idxs
+    return seq_encodings, attention_mask, loss_masks, run_times_tensor, labels, sample_idxs
 
 
 def plan_to_sequence(
@@ -99,16 +104,28 @@ def plan_to_sequence(
     run_times = []
     
     def depth_first_search(node, parent_id=None):
-        """Depth-first search to collect nodes."""
+        """
+        Depth-first search to collect nodes.
+        
+        Important: For most DBMS (Trino, etc.), per-node execution times are unreliable.
+        We only use the root node's total execution time. Sub-nodes get 0.
+        """
         if len(nodes) >= pad_length:
             return
         
         current_id = len(nodes)
         nodes.append(node)
         
-        # Get runtime
-        runtime = getattr(node.plan_parameters, 'act_time', 0.0) if hasattr(node.plan_parameters, 'act_time') else 0.0
-        run_times.append(runtime / 1000 if runtime else 0.0)
+        # Only root node (parent_id=None) gets the actual runtime
+        # Sub-nodes get 0 because per-operator times are unreliable
+        if parent_id is None:
+            # Root node: use plan.plan_runtime (already in milliseconds)
+            runtime = plan.plan_runtime / 1000.0  # Convert to seconds
+        else:
+            # Sub-node: set to 0
+            runtime = 0.0
+        
+        run_times.append(runtime)
         
         # Add edge
         if parent_id is not None:
@@ -214,20 +231,23 @@ def create_loss_mask(num_nodes: int, pad_length: int, heights: list, loss_weight
     """
     Create loss mask with height-based weighting.
     
+    Important: Since only the root node has a reliable runtime, we set its mask to 1.0
+    and all other nodes to 0.0. This focuses the loss on predicting total query time.
+    
     Args:
         num_nodes: Number of real nodes
         pad_length: Padded length
-        heights: Node heights in tree
-        loss_weight: Weight decay factor
+        heights: Node heights in tree (not used in current implementation)
+        loss_weight: Weight decay factor (not used in current implementation)
     
     Returns:
         Loss mask (pad_length,)
     """
     loss_mask = np.zeros(pad_length)
     
-    # Apply exponential weighting by height
-    for i in range(min(num_nodes, len(heights))):
-        loss_mask[i] = loss_weight ** heights[i]
+    # Only root node (index 0) contributes to loss
+    if num_nodes > 0:
+        loss_mask[0] = 1.0
     
     return torch.tensor(loss_mask, dtype=torch.float32)
 

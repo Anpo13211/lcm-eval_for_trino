@@ -35,15 +35,6 @@ def extract_flat_features_unified(
     # Aggregate features from entire plan tree
     all_features = []
     
-    # Plan-level features
-    plan_features = [
-        'operator_type',
-        'estimated_cardinality',
-        'estimated_cost',
-        'estimated_width',
-        'workers_planned'
-    ]
-    
     # Count operators
     operator_counts = {}
     total_est_card = 0.0
@@ -61,12 +52,12 @@ def extract_flat_features_unified(
         # Count operators
         operator_counts[op_type] = operator_counts.get(op_type, 0) + 1
         
-        # Aggregate numeric features
-        if est_card:
+        # Aggregate numeric features (use is not None to preserve zero values)
+        if est_card is not None:
             total_est_card += est_card
             max_est_card = max(max_est_card, est_card)
         
-        if est_cost:
+        if est_cost is not None:
             total_est_cost += est_cost
         
         # Traverse children
