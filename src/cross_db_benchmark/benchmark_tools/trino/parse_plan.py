@@ -551,8 +551,25 @@ def parse_trino_raw_plan_v2(plan_text, analyze=True, parse=True):
         for line in lines:
             timing_match = trino_timing_regex.search(line)
             if timing_match:
-                execution_time = float(timing_match.group(4))
-                planning_time = float(timing_match.group(3))
+                # 正規表現のグループ: 1=Queued値, 2=Queued単位, 3=Analysis値, 4=Analysis単位,
+                # 5=Planning値, 6=Planning単位, 7=Execution値, 8=Execution単位
+                execution_time = float(timing_match.group(7))  # Execution値
+                execution_unit = timing_match.group(8)  # Execution単位
+                if execution_unit and execution_unit == 's':
+                    execution_time *= 1000
+                elif execution_unit and execution_unit in ('us', 'μs'):
+                    execution_time /= 1000
+                elif execution_unit and execution_unit == 'm':
+                    execution_time *= 60000
+                
+                planning_time = float(timing_match.group(5))  # Planning値
+                planning_unit = timing_match.group(6)  # Planning単位
+                if planning_unit and planning_unit == 's':
+                    planning_time *= 1000
+                elif planning_unit and planning_unit in ('us', 'μs'):
+                    planning_time /= 1000
+                elif planning_unit and planning_unit == 'm':
+                    planning_time *= 60000
                 break
         
         return None, execution_time, planning_time

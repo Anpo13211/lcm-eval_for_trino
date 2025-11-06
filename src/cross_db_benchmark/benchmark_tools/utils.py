@@ -98,21 +98,56 @@ def load_column_statistics(dataset, namespace=True, prefer_zero_shot=False, pref
     zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
     trino_stats_dir = os.getenv('TRINO_STATS_DIR', 'datasets_statistics')
     
+    # プロジェクトルートを取得（utils.pyの場所から推測）
+    # src/cross_db_benchmark/benchmark_tools/utils.py から プロジェクトルートへ
+    # .. を3回上がるとプロジェクトルート（lcm-eval_for_trino）
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_file_dir, '..', '..', '..'))
+    
     if prefer_trino:
         # Trino統計を最優先
-        paths.append((os.path.join(trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'), 'trino'))
+        # 絶対パス（プロジェクトルートから）を最優先、次に相対パス
+        trino_paths = [
+            os.path.join(project_root, trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),  # 絶対パス（最優先）
+            os.path.abspath(os.path.join(trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json')),  # 現在のディレクトリからの絶対パス
+            os.path.join('..', trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),  # srcから実行時の場合
+            os.path.join(trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),  # プロジェクトルートから実行時の場合
+        ]
+        # 重複を除去しつつ順序を保持
+        seen = set()
+        for trino_path in trino_paths:
+            if trino_path not in seen:
+                paths.append((trino_path, 'trino'))
+                seen.add(trino_path)
         paths.append((os.path.join(zero_shot_base, dataset, 'column_statistics.json'), 'zeroshot'))
+        paths.append((os.path.join(project_root, 'cross_db_benchmark/datasets/', dataset, 'column_statistics.json'), 'zeroshot'))
         paths.append((os.path.join('cross_db_benchmark/datasets/', dataset, 'column_statistics.json'), 'zeroshot'))
     elif prefer_zero_shot:
         # zero-shot_datasets配下を優先
         paths.append((os.path.join(zero_shot_base, dataset, 'column_statistics.json'), 'zeroshot'))
-        paths.append((os.path.join(trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'), 'trino'))
+        # Trino統計も複数パスで試す
+        trino_paths = [
+            os.path.join(project_root, trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),
+            os.path.join(trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),
+            os.path.join('..', trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),
+        ]
+        for trino_path in trino_paths:
+            paths.append((trino_path, 'trino'))
+        paths.append((os.path.join(project_root, 'cross_db_benchmark/datasets/', dataset, 'column_statistics.json'), 'zeroshot'))
         paths.append((os.path.join('cross_db_benchmark/datasets/', dataset, 'column_statistics.json'), 'zeroshot'))
     else:
         # 従来のパスを優先（後方互換性）
+        paths.append((os.path.join(project_root, 'cross_db_benchmark/datasets/', dataset, 'column_statistics.json'), 'zeroshot'))
         paths.append((os.path.join('cross_db_benchmark/datasets/', dataset, 'column_statistics.json'), 'zeroshot'))
         paths.append((os.path.join(zero_shot_base, dataset, 'column_statistics.json'), 'zeroshot'))
-        paths.append((os.path.join(trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'), 'trino'))
+        # Trino統計も複数パスで試す
+        trino_paths = [
+            os.path.join(project_root, trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),
+            os.path.join(trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),
+            os.path.join('..', trino_stats_dir, f'iceberg_{dataset}', 'column_stats.json'),
+        ]
+        for trino_path in trino_paths:
+            paths.append((trino_path, 'trino'))
     
     # 存在するパスを探す
     for path, format_type in paths:

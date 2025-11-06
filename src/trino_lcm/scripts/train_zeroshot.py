@@ -111,10 +111,16 @@ class MockQuery:
         
         timing_match = trino_timing_regex.search(plan_text)
         if timing_match:
-            execution_time = float(timing_match.group(4))
-            execution_unit = timing_match.group(5)
-            if execution_unit == 's':
+            # 正規表現のグループ: 1=Queued値, 2=Queued単位, 3=Analysis値, 4=Analysis単位,
+            # 5=Planning値, 6=Planning単位, 7=Execution値, 8=Execution単位
+            execution_time = float(timing_match.group(7))  # Execution値
+            execution_unit = timing_match.group(8)  # Execution単位
+            if execution_unit and execution_unit == 's':
                 execution_time *= 1000
+            elif execution_unit and execution_unit in ('us', 'μs'):
+                execution_time /= 1000
+            elif execution_unit and execution_unit == 'm':
+                execution_time *= 60000
         
         if execution_time is None:
             # 古い書式 ("Execution Time: <value><unit>") にも対応

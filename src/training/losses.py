@@ -57,18 +57,65 @@ class DaceLoss(nn.Module):
         self.loss_masks = None
         self.preds = None
         self.real_run_times = None
+        self.real_cpu_times = None
+        self.real_blocked_times = None
+        self.real_queued_times = None
+        # マルチタスク損失の重み（デフォルト: 0.1）
+        self.multitask_weight = loss_kwargs.get('multitask_weight', 0.1)
         self.to(model.device)
 
     def forward(self, input, target):
-        input = self.preds
-        target = self.real_run_times
-        # print(self.preds.device, self.real_run_times.device)
-        loss = torch.max(input / target, target / input)
+        input = self.preds  # Shape: (batch, seq_len, 4) - [runtime, cpu, blocked, queued]
+        target = self.real_run_times  # Shape: (batch, seq_len)
+        
+        # メインの損失（runtime予測）
+        # input[:, :, 0] は Shape: (batch, seq_len) - 各ノードのruntime予測
+        loss = torch.max(input[:, :, 0] / (target + 1e-7), (target + 1e-7) / input[:, :, 0])
         loss = loss * self.loss_masks
         loss = torch.log(torch.where(loss > 1, loss, 1))
-        loss = torch.sum(loss, dim=1)
-        loss = torch.mean(loss)
-        return loss
+        loss_main = torch.sum(loss, dim=1)
+        loss_main = torch.mean(loss_main)
+        
+        # マルチタスク損失（CPU, blocked, queued）
+        loss_multitask = torch.tensor(0.0, device=self.real_run_times.device)
+        
+        if self.real_cpu_times is not None and input.shape[2] >= 2:
+            # CPU time損失
+            # input[:, :, 1] は Shape: (batch, seq_len) - 各ノードのCPU time予測
+            loss_cpu = torch.max(input[:, :, 1] / (self.real_cpu_times + 1e-7), 
+                                (self.real_cpu_times + 1e-7) / input[:, :, 1])
+            loss_cpu = loss_cpu * self.loss_masks
+            loss_cpu = torch.log(torch.where(loss_cpu > 1, loss_cpu, 1))
+            loss_cpu = torch.sum(loss_cpu, dim=1)
+            loss_cpu = torch.mean(loss_cpu)
+            loss_multitask = loss_multitask + loss_cpu
+        
+        if self.real_blocked_times is not None and input.shape[2] >= 3:
+            # Blocked time損失
+            # input[:, :, 2] は Shape: (batch, seq_len) - 各ノードのblocked time予測
+            loss_blocked = torch.max(input[:, :, 2] / (self.real_blocked_times + 1e-7), 
+                                    (self.real_blocked_times + 1e-7) / input[:, :, 2])
+            loss_blocked = loss_blocked * self.loss_masks
+            loss_blocked = torch.log(torch.where(loss_blocked > 1, loss_blocked, 1))
+            loss_blocked = torch.sum(loss_blocked, dim=1)
+            loss_blocked = torch.mean(loss_blocked)
+            loss_multitask = loss_multitask + loss_blocked
+        
+        if self.real_queued_times is not None and input.shape[2] >= 4:
+            # Queued time損失
+            # input[:, :, 3] は Shape: (batch, seq_len) - 各ノードのqueued time予測
+            loss_queued = torch.max(input[:, :, 3] / (self.real_queued_times + 1e-7), 
+                                   (self.real_queued_times + 1e-7) / input[:, :, 3])
+            loss_queued = loss_queued * self.loss_masks
+            loss_queued = torch.log(torch.where(loss_queued > 1, loss_queued, 1))
+            loss_queued = torch.sum(loss_queued, dim=1)
+            loss_queued = torch.mean(loss_queued)
+            loss_multitask = loss_multitask + loss_queued
+        
+        # 総損失: loss_main + λ * loss_multitask
+        total_loss = loss_main + self.multitask_weight * loss_multitask
+        
+        return total_loss
 
 
 class QPPLoss(torch.nn.Module):

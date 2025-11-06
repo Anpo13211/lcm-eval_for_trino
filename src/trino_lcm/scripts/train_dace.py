@@ -154,6 +154,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.5,
         help='Loss weight for height-based weighting (not used in Trino mode) (default: 0.5)'
     )
+    parser.add_argument(
+        '--multitask_weight',
+        type=float,
+        default=0.1,
+        help='Weight for multitask loss (CPU, blocked, queued time losses). Total loss = loss_main + λ * (loss_cpu + loss_blocked + loss_queued) (default: 0.1). Only used when --multitask_mode is True.'
+    )
+    parser.add_argument(
+        '--multitask_mode',
+        action='store_true',
+        default=False,
+        help='Enable multitask learning (predict CPU, blocked, queued time in addition to runtime). If False, only wall time (runtime) is used.'
+    )
     
     # 訓練設定
     parser.add_argument(
@@ -211,24 +223,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def train_epoch(model, train_loader, optimizer, device, epoch):
-    """1エポックの訓練"""
+    """1エポックの訓練（マルチタスク対応）"""
     model.train()
     total_loss = 0.0
     total_samples = 0
     
     pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
     for batch in pbar:
-        seq_encodings, attention_masks, loss_masks, run_times, labels, sample_idxs = batch
-        
-        # デバイスに移動
-        seq_encodings = seq_encodings.to(device)
-        attention_masks = attention_masks.to(device)
-        loss_masks = loss_masks.to(device)
-        run_times = run_times.to(device)
-        labels = labels.to(device)
+        # マルチタスク対応: 要素数で判定（後方互換性あり）
+        if len(batch) == 6:
+            # 従来の形式
+            seq_encodings, attention_masks, loss_masks, run_times, labels, sample_idxs = batch
+            seq_encodings = seq_encodings.to(device)
+            attention_masks = attention_masks.to(device)
+            loss_masks = loss_masks.to(device)
+            run_times = run_times.to(device)
+            labels = labels.to(device)
+            model_input = (seq_encodings, attention_masks, loss_masks, run_times)
+        else:
+            # マルチタスク形式
+            seq_encodings, attention_masks, loss_masks, run_times, cpu_times, blocked_times, queued_times, labels, sample_idxs = batch
+            seq_encodings = seq_encodings.to(device)
+            attention_masks = attention_masks.to(device)
+            loss_masks = loss_masks.to(device)
+            run_times = run_times.to(device)
+            cpu_times = cpu_times.to(device)
+            blocked_times = blocked_times.to(device)
+            queued_times = queued_times.to(device)
+            labels = labels.to(device)
+            model_input = (seq_encodings, attention_masks, loss_masks, run_times, cpu_times, blocked_times, queued_times)
         
         # フォワードパス
-        predictions = model((seq_encodings, attention_masks, loss_masks, run_times))
+        predictions = model(model_input)
         
         # 損失計算（DaceLossが自動的に使用される）
         loss = model.loss_fxn(predictions, labels)
@@ -248,22 +274,37 @@ def train_epoch(model, train_loader, optimizer, device, epoch):
 
 
 def validate(model, val_loader, device):
-    """検証"""
+    """検証（マルチタスク対応）"""
     model.eval()
     all_predictions = []
     all_labels = []
     
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validation"):
-            seq_encodings, attention_masks, loss_masks, run_times, labels, sample_idxs = batch
+            # マルチタスク対応: 要素数で判定（後方互換性あり）
+            if len(batch) == 6:
+                # 従来の形式
+                seq_encodings, attention_masks, loss_masks, run_times, labels, sample_idxs = batch
+                seq_encodings = seq_encodings.to(device)
+                attention_masks = attention_masks.to(device)
+                loss_masks = loss_masks.to(device)
+                run_times = run_times.to(device)
+                labels = labels.to(device)
+                model_input = (seq_encodings, attention_masks, loss_masks, run_times)
+            else:
+                # マルチタスク形式
+                seq_encodings, attention_masks, loss_masks, run_times, cpu_times, blocked_times, queued_times, labels, sample_idxs = batch
+                seq_encodings = seq_encodings.to(device)
+                attention_masks = attention_masks.to(device)
+                loss_masks = loss_masks.to(device)
+                run_times = run_times.to(device)
+                cpu_times = cpu_times.to(device)
+                blocked_times = blocked_times.to(device)
+                queued_times = queued_times.to(device)
+                labels = labels.to(device)
+                model_input = (seq_encodings, attention_masks, loss_masks, run_times, cpu_times, blocked_times, queued_times)
             
-            seq_encodings = seq_encodings.to(device)
-            attention_masks = attention_masks.to(device)
-            loss_masks = loss_masks.to(device)
-            run_times = run_times.to(device)
-            labels = labels.to(device)
-            
-            predictions = model((seq_encodings, attention_masks, loss_masks, run_times))
+            predictions = model(model_input)
             
             all_predictions.extend(predictions.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
@@ -491,6 +532,7 @@ def run(args) -> int:
         num_workers=args.num_workers,
         device=device,
         loss_class_name='DaceLoss',
+        loss_class_kwargs={'multitask_weight': args.multitask_weight},  # マルチタスク損失の重み
         cap_training_samples=args.cap_training_samples,
         featurization=featurization,
         optimizer_kwargs=dict(lr=args.learning_rate)
@@ -562,7 +604,8 @@ def run(args) -> int:
         statistics_file=statistics_file,
         model_config=model_config,
         workload_runs=workload_runs,
-        dataloader_options=dataloader_options
+        dataloader_options=dataloader_options,
+        multitask_mode=args.multitask_mode
     )
     
     print(f"Training batches: {len(train_loader)}")
@@ -834,6 +877,7 @@ def run_train_multi_all(args, output_dir: Path, device: torch.device) -> int:
                 num_workers=args.num_workers,
                 device=device,
                 loss_class_name='DaceLoss',
+                loss_class_kwargs={'multitask_weight': args.multitask_weight},  # マルチタスク損失の重み
                 cap_training_samples=args.cap_training_samples,
                 featurization=featurization,
                 optimizer_kwargs=dict(lr=args.learning_rate)
@@ -859,7 +903,8 @@ def run_train_multi_all(args, output_dir: Path, device: torch.device) -> int:
                 model_config=model_config,
                 workload_runs=workload_runs,
                 dataloader_options=dataloader_options,
-                preloaded_plans=preloaded_plans
+                preloaded_plans=preloaded_plans,
+                multitask_mode=args.multitask_mode
             )
             
             print(f"Training batches: {len(train_loader)}")

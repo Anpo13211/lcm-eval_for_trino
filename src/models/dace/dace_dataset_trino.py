@@ -33,12 +33,14 @@ def create_dace_dataloader(statistics_file: Path,
                            model_config: DACEModelConfig,
                            workload_runs: WorkloadRuns,
                            dataloader_options: DataLoaderOptions,
-                           preloaded_plans=None) -> Tuple[dict, DataLoader, DataLoader, list[DataLoader]]:
+                           preloaded_plans=None,
+                           multitask_mode=True) -> Tuple[dict, DataLoader, DataLoader, list[DataLoader]]:
     """
     Create DACE dataloaders.
     
     Args:
         preloaded_plans: Optional dict mapping file paths to already loaded plans
+        multitask_mode: Trueの場合はマルチタスク形式（CPU, blocked, queued timeも含む）、Falseの場合はwall timeのみ
     """
     feature_statistics = load_json(statistics_file, namespace=False)
     assert feature_statistics != {}, "Feature statistics file is empty!"
@@ -51,7 +53,8 @@ def create_dace_dataloader(statistics_file: Path,
                            pin_memory=dataloader_options.pin_memory,
                            collate_fn=functools.partial(dace_collator_trino,
                                                         feature_statistics=feature_statistics,
-                                                        config=model_config))
+                                                        config=model_config,
+                                                        multitask_mode=multitask_mode))
 
     if workload_runs.train_workload_runs:
         train_dataset, val_dataset = create_dace_datasets(workload_run_paths=workload_runs.train_workload_runs,
@@ -82,7 +85,8 @@ def create_dace_dataloader(statistics_file: Path,
 def create_dace_datasets(workload_run_paths,
                          model_config: DACEModelConfig,
                          val_ratio=0.15,
-                         shuffle_before_split=True) -> (PlanDataset, PlanDataset):
+                         shuffle_before_split=True,
+                         preloaded_plans=None) -> (PlanDataset, PlanDataset):
     plans = []
     for workload_run in workload_run_paths:
         plans += read_workload_run(workload_run)
@@ -113,13 +117,16 @@ def create_dace_datasets(workload_run_paths,
     return train_dataset, val_dataset
 
 
-def dace_collator_trino(batch: Tuple, feature_statistics: dict, config: DACEModelConfig):
+def dace_collator_trino(batch: Tuple, feature_statistics: dict, config: DACEModelConfig, multitask_mode=True):
     """
     Trino向けのcollator関数
     
     主な変更点：
     - Trinoのプラン構造に対応
     - ルートノードの実行時間のみを訓練ラベルとして使用
+    
+    Args:
+        multitask_mode: Trueの場合はマルチタスク形式（9要素）を返す、Falseの場合は従来形式（6要素）を返す
     """
     # Get plan encodings
     add_numerical_scalers(feature_statistics)
@@ -127,17 +134,33 @@ def dace_collator_trino(batch: Tuple, feature_statistics: dict, config: DACEMode
     # Get op_name to one-hot, using feature_statistics
     op_name_to_one_hot = get_op_name_to_one_hot(feature_statistics)
 
-    labels, sample_idxs, seq_encodings, attention_masks, loss_masks, all_runtimes = [], [], [], [], [], []
+    labels, sample_idxs, seq_encodings, attention_masks, loss_masks = [], [], [], [], []
+    all_runtimes, all_cpu_times, all_blocked_times, all_queued_times = [], [], [], []
 
     for sample_idx, p in batch:
         sample_idxs.append(sample_idx)
-        seq_encoding, attention_mask, loss_mask, run_times = get_plan_encoding_trino(
-            query_plan=p,
-            model_config=config,
-            op_name_to_one_hot=op_name_to_one_hot,
-            plan_parameters=config.featurization.PLAN_FEATURES,
-            feature_statistics=feature_statistics
-        )
+        
+        if multitask_mode:
+            # マルチタスク形式: CPU, blocked, queued timeも取得
+            seq_encoding, attention_mask, loss_mask, run_times, cpu_times, blocked_times, queued_times = get_plan_encoding_trino(
+                query_plan=p,
+                model_config=config,
+                op_name_to_one_hot=op_name_to_one_hot,
+                plan_parameters=config.featurization.PLAN_FEATURES,
+                feature_statistics=feature_statistics
+            )
+            all_cpu_times.append(cpu_times)
+            all_blocked_times.append(blocked_times)
+            all_queued_times.append(queued_times)
+        else:
+            # 従来形式: wall timeのみ
+            seq_encoding, attention_mask, loss_mask, run_times = get_plan_encoding_trino_legacy(
+                query_plan=p,
+                model_config=config,
+                op_name_to_one_hot=op_name_to_one_hot,
+                plan_parameters=config.featurization.PLAN_FEATURES,
+                feature_statistics=feature_statistics
+            )
         
         # Trinoでは全体の実行時間のみを使用
         labels.append(torch.tensor(p.plan_runtime) / 1000)
@@ -151,8 +174,15 @@ def dace_collator_trino(batch: Tuple, feature_statistics: dict, config: DACEMode
     seq_encodings = torch.stack(seq_encodings)
     attention_masks = torch.stack(attention_masks)
     loss_masks = torch.stack(loss_masks)
-
-    return seq_encodings, attention_masks, loss_masks, all_runtimes, labels, sample_idxs
+    
+    if multitask_mode:
+        all_cpu_times = torch.stack(all_cpu_times)
+        all_blocked_times = torch.stack(all_blocked_times)
+        all_queued_times = torch.stack(all_queued_times)
+        return seq_encodings, attention_masks, loss_masks, all_runtimes, all_cpu_times, all_blocked_times, all_queued_times, labels, sample_idxs
+    else:
+        # 従来形式: 6要素のみを返す
+        return seq_encodings, attention_masks, loss_masks, all_runtimes, labels, sample_idxs
 
 
 def get_op_name_to_one_hot(feature_statistics: dict) -> dict:
@@ -442,11 +472,11 @@ def get_attention_mask(adj: list, seq_length: int, pad_length: int, node_length,
     return attention_mask_seq
 
 
-def get_plan_sequence_trino(plan: SimpleNamespace, pad_length: int = 20) -> Tuple[list, list, list, list]:
+def get_plan_sequence_trino(plan: SimpleNamespace, pad_length: int = 20) -> Tuple[list, list, list, list, list, list]:
     """
-    Trino向けのプランシーケンス生成関数
+    Trino向けのプランシーケンス生成関数（マルチタスク対応）
     
-    Trinoのプラン構造を走査し、ノードのシーケンス、実行時間、隣接行列、高さを取得
+    Trinoのプラン構造を走査し、ノードのシーケンス、実行時間、CPU時間、blocked時間、queued時間、隣接行列、高さを取得
     
     Args:
         plan: Trinoプラン（SimpleNamespace形式）
@@ -454,33 +484,44 @@ def get_plan_sequence_trino(plan: SimpleNamespace, pad_length: int = 20) -> Tupl
     
     Returns:
         seq: ノードのplan_parameters（辞書）のリスト
-        run_times: 各ノードの実行時間リスト（Trinoではデフォルト値）
+        run_times: 各ノードの実行時間リスト
+        cpu_times: 各ノードのCPU時間リスト
+        blocked_times: 各ノードのblocked時間リスト
+        queued_times: 各ノードのqueued時間リスト
         adjs: 隣接リスト [(parent, child), ...]
         heights: 各ノードの高さリスト
     """
     seq = []
     run_times = []
+    cpu_times = []
+    blocked_times = []
+    queued_times = []
     adjs = []  # [(parent, child)]
     heights = []  # the height of each node, root node's height is 0
-    depth_first_search_trino(plan, seq, adjs, -1, run_times, heights, 0)
+    depth_first_search_trino(plan, seq, adjs, -1, run_times, cpu_times, blocked_times, queued_times, heights, 0)
 
-    # padding run_times to the same length
+    # padding all time lists to the same length
     if len(run_times) < pad_length:
-        run_times = run_times + [1] * (pad_length - len(run_times))
-    return seq, run_times, adjs, heights
+        pad_length_diff = pad_length - len(run_times)
+        run_times = run_times + [0.0] * pad_length_diff
+        cpu_times = cpu_times + [0.0] * pad_length_diff
+        blocked_times = blocked_times + [0.0] * pad_length_diff
+        queued_times = queued_times + [0.0] * pad_length_diff
+    return seq, run_times, cpu_times, blocked_times, queued_times, adjs, heights
 
 
 def depth_first_search_trino(plan: SimpleNamespace, seq: list, adjs: list,
-                              parent_node_id: int, run_times: list, heights: list, cur_height: int) -> None:
+                              parent_node_id: int, run_times: list, cpu_times: list, 
+                              blocked_times: list, queued_times: list, heights: list, cur_height: int) -> None:
     """
-    Trino向けのDFS関数
+    Trino向けのDFS関数（マルチタスク対応）
     
-    Trinoのプラン構造を深さ優先探索で走査
+    Trinoのプラン構造を深さ優先探索で走査し、実行時間、CPU時間、blocked時間、queued時間を収集
     
     主な変更点：
     1. plan_parametersがSimpleNamespace形式（PostgreSQLと統一）
     2. act_timeの代わりにact_cpu_timeやact_scheduled_timeを使用
-    3. Trinoではサブプランの実行時間が正確に取れないため、デフォルト値を使用
+    3. CPU time、blocked time、queued timeも収集（マルチタスク学習用）
     
     Args:
         plan: 現在のプランノード
@@ -488,6 +529,9 @@ def depth_first_search_trino(plan: SimpleNamespace, seq: list, adjs: list,
         adjs: 隣接リストを格納するリスト
         parent_node_id: 親ノードのID（-1はルート）
         run_times: 各ノードの実行時間を格納するリスト
+        cpu_times: 各ノードのCPU時間を格納するリスト
+        blocked_times: 各ノードのblocked時間を格納するリスト
+        queued_times: 各ノードのqueued時間を格納するリスト
         heights: 各ノードの高さを格納するリスト
         cur_height: 現在の高さ
     """
@@ -512,15 +556,30 @@ def depth_first_search_trino(plan: SimpleNamespace, seq: list, adjs: list,
         # サブノードの実行時間はTrinoでは取得できないので、0に設定
         # 損失計算では使用されない（loss_maskが0のため）
         act_time = 0.0
-
-        # cpu_time を使う場合は以下を使う
-        # if hasattr(plan, 'plan_parameters'):
-        #     # act_cpu_time または act_scheduled_time があれば使用
-        #     act_time = getattr(plan.plan_parameters, 'act_cpu_time', None)
-        #     if act_time is None:
-        #         act_time = getattr(plan.plan_parameters, 'act_scheduled_time', 0.01)
     
     run_times.append(act_time)
+    
+    # CPU時間、blocked時間、queued時間を取得
+    cpu_time = 0.0
+    blocked_time = 0.0
+    queued_time = 0.0
+    
+    if hasattr(plan, 'plan_parameters'):
+        params = plan.plan_parameters
+        # CPU時間（act_cpu_timeまたはact_scheduled_time）
+        cpu_time = getattr(params, 'act_cpu_time', None)
+        if cpu_time is None:
+            cpu_time = getattr(params, 'act_scheduled_time', 0.0)
+        
+        # Blocked時間
+        blocked_time = getattr(params, 'act_blocked_time', 0.0)
+        
+        # Queued時間（Trinoでは通常0だが、取得できる場合は使用）
+        queued_time = getattr(params, 'act_queued_time', 0.0)
+    
+    cpu_times.append(cpu_time)
+    blocked_times.append(blocked_time)
+    queued_times.append(queued_time)
 
     # 親ノードとの関係を追加
     if parent_node_id != -1:  # not root node
@@ -529,18 +588,19 @@ def depth_first_search_trino(plan: SimpleNamespace, seq: list, adjs: list,
     # 子ノードを再帰的に処理
     if hasattr(plan, "children") and plan.children:
         for child in plan.children:
-            depth_first_search_trino(child, seq, adjs, cur_node_id, run_times, heights, cur_height + 1)
+            depth_first_search_trino(child, seq, adjs, cur_node_id, run_times, cpu_times, 
+                                    blocked_times, queued_times, heights, cur_height + 1)
 
 
-def get_plan_encoding_trino(query_plan: SimpleNamespace,
-                            model_config: DACEModelConfig,
-                            op_name_to_one_hot: dict,
-                            plan_parameters: list,
-                            feature_statistics: dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def get_plan_encoding_trino_legacy(query_plan: SimpleNamespace,
+                                   model_config: DACEModelConfig,
+                                   op_name_to_one_hot: dict,
+                                   plan_parameters: list,
+                                   feature_statistics: dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Trino向けのプランエンコーディング関数
+    Trino向けのプランエンコーディング関数（従来形式: wall timeのみ）
     
-    プランからエンコーディング、attention mask、loss maskを生成
+    プランからエンコーディング、attention mask、loss maskを生成（wall timeのみ）
     
     Args:
         query_plan: Trinoクエリプラン
@@ -555,8 +615,8 @@ def get_plan_encoding_trino(query_plan: SimpleNamespace,
         loss_mask: Loss mask（Trinoではルートノードのみ1.0）
         run_times: 実行時間（正規化済み）
     """
-    # プランシーケンスを取得
-    seq, run_times, adjacency_matrix, heights = get_plan_sequence_trino(query_plan, model_config.pad_length)
+    # プランシーケンスを取得（wall timeのみ、CPU/blocked/queued timeは収集しない）
+    seq, run_times, _, _, _, adjacency_matrix, heights = get_plan_sequence_trino(query_plan, model_config.pad_length)
     assert len(seq) == len(heights)
 
     # 実行時間を正規化
@@ -587,4 +647,74 @@ def get_plan_encoding_trino(query_plan: SimpleNamespace,
                                     model_config.loss_weight)
 
     return seq_encoding, attention_mask, loss_mask, run_times
+
+
+def get_plan_encoding_trino(query_plan: SimpleNamespace,
+                            model_config: DACEModelConfig,
+                            op_name_to_one_hot: dict,
+                            plan_parameters: list,
+                            feature_statistics: dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Trino向けのプランエンコーディング関数（マルチタスク対応）
+    
+    プランからエンコーディング、attention mask、loss maskを生成
+    
+    Args:
+        query_plan: Trinoクエリプラン
+        model_config: DACEモデル設定
+        op_name_to_one_hot: オペレータ名からone-hotへのマッピング
+        plan_parameters: エンコードする特徴量リスト
+        feature_statistics: 特徴量統計情報
+    
+    Returns:
+        seq_encoding: エンコード済みシーケンス
+        attention_mask: Attention mask
+        loss_mask: Loss mask（Trinoではルートノードのみ1.0）
+        run_times: 実行時間（正規化済み）
+        cpu_times: CPU時間（正規化済み）
+        blocked_times: Blocked時間（正規化済み）
+        queued_times: Queued時間（正規化済み）
+    """
+    # プランシーケンスを取得
+    seq, run_times, cpu_times, blocked_times, queued_times, adjacency_matrix, heights = get_plan_sequence_trino(query_plan, model_config.pad_length)
+    assert len(seq) == len(heights)
+
+    # 実行時間を正規化
+    run_times = np.array(run_times).astype(np.float32) / model_config.max_runtime + 1e-7
+    run_times = torch.from_numpy(run_times)
+    
+    # CPU時間、blocked時間、queued時間も正規化（max_runtimeで正規化）
+    cpu_times = np.array(cpu_times).astype(np.float32) / model_config.max_runtime + 1e-7
+    cpu_times = torch.from_numpy(cpu_times)
+    
+    blocked_times = np.array(blocked_times).astype(np.float32) / model_config.max_runtime + 1e-7
+    blocked_times = torch.from_numpy(blocked_times)
+    
+    queued_times = np.array(queued_times).astype(np.float32) / model_config.max_runtime + 1e-7
+    queued_times = torch.from_numpy(queued_times)
+
+    # シーケンスをエンコード
+    seq_encoding = generate_seqs_encoding_trino(seq, op_name_to_one_hot, plan_parameters, feature_statistics)
+
+    # シーケンスをパディング
+    seq_encoding, seq_length = pad_sequence(seq_encoding=seq_encoding,
+                                            padding_value=0,
+                                            node_length=model_config.node_length,
+                                            max_length=model_config.pad_length)
+
+    # attention maskを取得
+    attention_mask = get_attention_mask(adjacency_matrix,
+                                        seq_length,
+                                        model_config.pad_length,
+                                        model_config.node_length,
+                                        heights)
+
+    # loss maskを取得（Trinoモード: ルートノードのみ1.0）
+    loss_mask = get_loss_mask_trino(seq_length,
+                                    model_config.pad_length,
+                                    model_config.node_length,
+                                    heights,
+                                    model_config.loss_weight)
+
+    return seq_encoding, attention_mask, loss_mask, run_times, cpu_times, blocked_times, queued_times
 
