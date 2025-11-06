@@ -33,11 +33,12 @@ import core.init_plugins
 
 from core.plugins.registry import DBMSRegistry
 from core.statistics.schema import StandardizedStatistics
-from models.query_former.unified_queryformer_dataloader import unified_queryformer_collator
+from models.query_former.dataloader import query_former_plan_collator
 from models.query_former.model import QueryFormer
-from classes.classes import QueryFormerModelConfig, InputDims
-from training.unified_featurizations import UnifiedQueryFormerFeaturization
+from classes.classes import QueryFormerModelConfig
+from models.workload_driven.dataset.dataset_creation import PlanModelInputDims
 from training.training.metrics import QError, RMSE
+from types import SimpleNamespace
 
 
 class UnifiedPlanDataset(Dataset):
@@ -51,8 +52,48 @@ class UnifiedPlanDataset(Dataset):
         return idx, self.plans[idx]
 
 
-def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans: int = None):
-    """Load plans from txt files."""
+def load_table_samples(schema_name: str, no_samples: int = 1000):
+    """Load table samples from CSV files for sample_vec generation."""
+    import pandas as pd
+    from cross_db_benchmark.benchmark_tools.utils import load_schema_json
+    
+    # Try zero-shot-data location
+    data_dirs = [
+        f'/Users/an/query_engine/lakehouse/zero-shot_datasets/{schema_name}',
+        f'../zero-shot-data/datasets/{schema_name}',
+        f'data/{schema_name}'
+    ]
+    
+    schema = load_schema_json(schema_name, prefer_zero_shot=True)
+    table_samples = {}
+    
+    # Get CSV reading kwargs from schema
+    csv_kwargs = vars(schema.csv_kwargs) if hasattr(schema, 'csv_kwargs') else {}
+    
+    for table_name in schema.tables:
+        df = None
+        for data_dir in data_dirs:
+            csv_path = Path(data_dir) / f'{table_name}.csv'
+            if csv_path.exists():
+                try:
+                    df = pd.read_csv(csv_path, **csv_kwargs)
+                    if len(df) > no_samples:
+                        df = df.sample(random_state=0, n=no_samples)
+                    break
+                except Exception as e:
+                    print(f"  ⚠️  Failed to read {csv_path}: {e}")
+        
+        if df is not None:
+            table_samples[table_name] = df
+        else:
+            print(f"  ⚠️  No data found for table {table_name}")
+    
+    return table_samples if table_samples else None
+
+
+def load_plans_from_txt(file_paths: list, dbms_name: str, schema_name: str, max_plans: int = None, 
+                        table_samples=None, col_stats=None):
+    """Load plans from txt files with sample_vec generation."""
     parser = DBMSRegistry.get_parser(dbms_name)
     
     all_plans = []
@@ -61,6 +102,15 @@ def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans: int = None)
         parsed_plans, runtimes = parser.parse_explain_analyze_file(
             str(file_path), min_runtime=0, max_runtime=float('inf')
         )
+        
+        # Augment sample_vec if table_samples available
+        if table_samples and col_stats and dbms_name == "trino":
+            from models.workload_driven.preprocessing.sample_vectors_trino import augment_sample
+            for plan in parsed_plans:
+                try:
+                    augment_sample(table_samples, col_stats, plan)
+                except Exception as e:
+                    pass  # Continue even if sample_vec generation fails
         
         for plan, runtime in zip(parsed_plans, runtimes):
             plan.plan_runtime = runtime
@@ -74,102 +124,139 @@ def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans: int = None)
     return all_plans
 
 
-def create_feature_statistics(plans, featurization, dbms_name: str):
-    """Generate feature statistics from plans."""
-    print("📊 Collecting feature statistics...")
-    
+def build_feature_statistics(plans, db_stats, column_stats, dbms_name: str):
+    """
+    Build feature_statistics by combining (1) plan-derived vocabularies and numeric ranges,
+    and (2) database/column statistics for max ranges.
+    """
     from sklearn.preprocessing import RobustScaler
     from core.features.mapper import FeatureMapper
-    
-    actual_op_names = set()
-    filter_operators = set()
-    numeric_feature_values = {
+
+    mapper = FeatureMapper(dbms_name)
+
+    # Collect categorical vocabularies
+    op_names = set()
+    filter_ops = set()
+    agg_ops = set()
+    join_conds = set()
+
+    # Collect numeric values
+    numeric_values = {
         'estimated_cardinality': [],
         'estimated_cost': [],
         'estimated_width': [],
     }
 
-    mapper = FeatureMapper(dbms_name)
-    
-    def collect_from_node(node):
-        if hasattr(node, 'plan_parameters'):
-            params = node.plan_parameters
-            op = params.get('op_name') if isinstance(params, dict) else getattr(params, 'op_name', None)
-            if op:
-                actual_op_names.add(op)
-            
-            # Collect numeric values
-            for feat_name in numeric_feature_values.keys():
-                try:
-                    value = mapper.get_feature(feat_name, params)
-                    if value is not None and not isinstance(value, str):
-                        numeric_feature_values[feat_name].append(float(value))
-                except:
-                    pass
-            
-            # Collect filter operators
-            filter_col = params.get('filter_columns') if isinstance(params, dict) else getattr(params, 'filter_columns', None)
-            if filter_col:
-                def collect_filter_ops(fc):
-                    op = fc.get('operator') if isinstance(fc, dict) else getattr(fc, 'operator', None)
-                    if op:
-                        filter_operators.add(str(op))
-                    children = fc.get('children', []) if isinstance(fc, dict) else getattr(fc, 'children', [])
-                    for child in children:
-                        collect_filter_ops(child)
-                collect_filter_ops(filter_col)
-        
-        for child in node.children:
-            collect_from_node(child)
-    
-    for plan in plans:
-        collect_from_node(plan)
-    
-    print(f"  Found {len(actual_op_names)} operator types")
-    print(f"  Found {len(filter_operators)} filter operators")
-    
-    feature_statistics = {
-        'op_name': {
-            'type': 'categorical',
-            'value_dict': {op: i for i, op in enumerate(sorted(actual_op_names))},
-            'no_vals': len(actual_op_names)
-        },
-        'operator': {
-            'type': 'categorical',
-            'value_dict': {op: i for i, op in enumerate(sorted(filter_operators))} if filter_operators else {'=': 0},
-            'no_vals': max(len(filter_operators), 1)
-        },
-        'column': {
-            'max': 100,
-            'type': 'numeric'
-        }
-    }
-    
-    # Aliases
-    feature_statistics['operator_type'] = feature_statistics['op_name']
-    
-    # Numeric features with actual statistics
-    for feat_name, values in numeric_feature_values.items():
-        if len(values) > 0:
-            values_array = np.array(values, dtype=np.float32).reshape(-1, 1)
-            scaler = RobustScaler()
-            scaler.fit(values_array)
-            
-            feature_statistics[feat_name] = {
-                'type': 'numeric',
-                'max': float(values_array.max()),
-                'scale': float(scaler.scale_.item()),
-                'center': float(scaler.center_.item())
-            }
-            print(f"    {feat_name}: max={values_array.max():.2f}, samples={len(values)}")
+    def walk(node):
+        if not hasattr(node, 'plan_parameters'):
+            return
+        params = node.plan_parameters
+
+        # operator names
+        op = params.get('op_name') if isinstance(params, dict) else getattr(params, 'op_name', None)
+        if op:
+            op_names.add(str(op))
+
+        # numeric features via FeatureMapper
+        for k in numeric_values.keys():
+            try:
+                v = mapper.get_feature(k, params)
+                if v is not None and not isinstance(v, str):
+                    numeric_values[k].append(float(v))
+            except Exception:
+                pass
+
+        # filter operators (traverse tree)
+        filt = params.get('filter_columns') if isinstance(params, dict) else getattr(params, 'filter_columns', None)
+        if filt:
+            def rec(fc):
+                op = fc.get('operator') if isinstance(fc, dict) else getattr(fc, 'operator', None)
+                if op is not None:
+                    filter_ops.add(str(op))
+                children = fc.get('children', []) if isinstance(fc, dict) else getattr(fc, 'children', [])
+                for c in children:
+                    rec(c)
+            rec(filt)
+
+        # aggregations (output_columns)
+        outs = params.get('output_columns') if isinstance(params, dict) else getattr(params, 'output_columns', None)
+        if outs:
+            for oc in outs:
+                agg = oc.get('aggregation') if isinstance(oc, dict) else getattr(oc, 'aggregation', None)
+                if agg is not None:
+                    agg_ops.add(str(agg))
+
+        # join conds if present at root level
+        if hasattr(node, 'join_conds') and getattr(node, 'join_conds'):
+            for jc in getattr(node, 'join_conds'):
+                join_conds.add(str(jc))
+
+        # children
+        for ch in getattr(node, 'children', []) or []:
+            walk(ch)
+
+    for p in plans:
+        walk(p)
+
+    # Tables from db_stats
+    table_names = list(getattr(db_stats, 'table_stats', {}).keys()) if db_stats else []
+
+    # Numeric scalers
+    feature_statistics = {}
+    for feat, vals in numeric_values.items():
+        if len(vals) == 0:
+            feature_statistics[feat] = dict(type='numeric', max=1.0, center=0.0, scale=1.0)
         else:
-            feature_statistics[feat_name] = {
-                'type': 'numeric',
-                'max': 1.0,
-                'scale': 1.0,
-                'center': 0.0
-            }
-    
+            vals_np = np.array(vals, dtype=np.float32).reshape(-1, 1)
+            scaler = RobustScaler()
+            scaler.fit(vals_np)
+            feature_statistics[feat] = dict(
+                type='numeric',
+                max=float(vals_np.max()),
+                center=float(scaler.center_.item()),
+                scale=float(scaler.scale_.item()),
+            )
+
+    # Categorical vocabularies
+    feature_statistics['op_name'] = dict(
+        type='categorical',
+        value_dict={v: i for i, v in enumerate(sorted(op_names))},
+        no_vals=len(op_names),
+    )
+    feature_statistics['operator'] = dict(
+        type='categorical',
+        value_dict={v: i for i, v in enumerate(sorted(filter_ops))} if filter_ops else {'=': 0},
+        no_vals=max(len(filter_ops), 1),
+    )
+    feature_statistics['aggregation'] = dict(
+        type='categorical',
+        value_dict={v: i for i, v in enumerate(sorted(agg_ops))} if agg_ops else {'': 0},
+        no_vals=max(len(agg_ops), 1),
+    )
+    feature_statistics['join_conds'] = dict(
+        type='categorical',
+        value_dict={v: i for i, v in enumerate(sorted(join_conds))} if join_conds else {'': 0},
+        no_vals=max(len(join_conds), 1),
+    )
+    feature_statistics['tablename'] = dict(
+        type='categorical',
+        value_dict={v: i for i, v in enumerate(sorted(table_names))} if table_names else {'': 0},
+        no_vals=max(len(table_names), 1),
+    )
+
+    # Ranges
+    # columns.max: use number of distinct columns in column_stats
+    num_columns = len(column_stats) if isinstance(column_stats, dict) else 1024
+    feature_statistics['columns'] = dict(type='numeric', max=num_columns)
+    feature_statistics['column'] = dict(type='numeric', max=num_columns)
+
+    # table.max from db_stats
+    num_tables = len(table_names) if table_names else 64
+    feature_statistics['table'] = dict(type='numeric', max=num_tables)
+
+    # Alias
+    feature_statistics['operator_type'] = feature_statistics['op_name']
+
     return feature_statistics
 
 
@@ -194,18 +281,24 @@ def run_training(
     print("="*80)
     print()
     
+    # Load table samples for sample_vec generation
+    print("📂 Loading table samples")
+    table_samples = load_table_samples(schema_name, no_samples=1000)
+    if table_samples:
+        print(f"✓ Loaded {len(table_samples)} table samples")
+    else:
+        print("⚠️  No table samples found, sample_vec will be default values")
+    print()
+    
     # Load plans
     print("📂 Loading plans")
-    train_plans = load_plans_from_txt(train_files, dbms_name, max_plans)
-    test_plans = load_plans_from_txt(test_files, dbms_name, max_plans)
+    # Note: col_stats will be loaded later, so first pass without sample_vec
+    train_plans = load_plans_from_txt(train_files, dbms_name, schema_name, max_plans)
+    test_plans = load_plans_from_txt(test_files, dbms_name, schema_name, max_plans)
     print(f"✓ Train: {len(train_plans)}, Test: {len(test_plans)}")
     print()
     
-    # Feature statistics
     all_plans = train_plans + test_plans
-    feature_statistics = create_feature_statistics(all_plans, UnifiedQueryFormerFeaturization, dbms_name=dbms_name)
-    print(f"✓ Generated {len(feature_statistics)} feature types")
-    print()
     
     # Load database statistics
     print("📊 Loading database statistics")
@@ -235,6 +328,57 @@ def run_training(
     
     print()
     
+    # Load column statistics and augment sample_vec
+    print("📊 Loading column statistics and augmenting sample_vec")
+    try:
+        col_stats_path = Path('datasets_statistics') / f"iceberg_{schema_name}" / 'column_stats.json'
+        from cross_db_benchmark.benchmark_tools.utils import load_json
+        column_statistics = load_json(str(col_stats_path), namespace=False)
+        
+        # Convert column_statistics to list format for augment_sample
+        col_stats_list = []
+        for key, val in column_statistics.items():
+            # Key can be tuple or string "(table, column)"
+            if isinstance(key, tuple) and len(key) == 2:
+                table_name, col_name = key
+            elif isinstance(key, str) and key.startswith('('):
+                # Parse string like "('table', 'column')"
+                import ast
+                try:
+                    table_name, col_name = ast.literal_eval(key)
+                except:
+                    continue
+            else:
+                continue
+            
+            val_copy = dict(val)
+            val_copy['tablename'] = table_name
+            val_copy['attname'] = col_name
+            col_stats_list.append(SimpleNamespace(**val_copy))
+        
+        # Augment sample_vec for all plans
+        if table_samples and col_stats_list:
+            from models.workload_driven.preprocessing.sample_vectors_trino import augment_sample
+            print(f"  Generating sample_vec for {len(all_plans)} plans...")
+            for plan in all_plans:
+                try:
+                    augment_sample(table_samples, col_stats_list, plan)
+                except Exception:
+                    pass  # Continue even if fails
+            print(f"✓ Sample vectors generated")
+        else:
+            print(f"  ⚠️  Skipping sample_vec generation (missing data)")
+            column_statistics = {}
+    except Exception as e:
+        print(f"⚠️  Column statistics loading failed: {e}")
+        column_statistics = {}
+    
+    # Build feature statistics from plans and DB stats
+    print("📊 Building feature statistics from plans and DB stats")
+    feature_statistics = build_feature_statistics(all_plans, db_stats.get(0), column_statistics, dbms_name)
+    print(f"✓ Built {len(feature_statistics)} feature types")
+    print()
+    
     # Split train/val
     print("📦 Creating dataloaders")
     train_size = int(0.85 * len(train_plans))
@@ -244,12 +388,29 @@ def run_training(
         generator=torch.Generator().manual_seed(42)
     )
     
-    # Create collator
+    # Create model
+    print("🤖 Creating QueryFormer model")
+    
+    config = QueryFormerModelConfig(
+        hidden_dim_plan=hidden_dim,
+        device=device
+    )
+    
+    # column_statistics already loaded above, just rebuild feature_statistics with it
+    feature_statistics = build_feature_statistics(all_plans, db_stats.get(0), column_statistics, dbms_name)
+
+    # Create collator (use original query_former_plan_collator)
     collate_fn = functools.partial(
-        unified_queryformer_collator,
-        dbms_name=dbms_name,
+        query_former_plan_collator,
         feature_statistics=feature_statistics,
-        db_statistics=db_stats
+        db_statistics=db_stats,
+        column_statistics=column_statistics,
+        word_embeddings=None,  # Not needed for basic version
+        dim_word_hash=1000,
+        dim_word_embedding=64,
+        histogram_bin_size=config.histogram_bin_number,
+        max_num_filters=config.max_num_filters,
+        dim_bitmaps=1000
     )
     
     train_loader = DataLoader(
@@ -276,17 +437,10 @@ def run_training(
     print(f"✓ Train: {len(train_loader)}, Val: {len(val_loader)}, Test: {len(test_loader)}")
     print()
     
-    # Create model
-    print("🤖 Creating QueryFormer model")
-    
-    config = QueryFormerModelConfig(
-        hidden_dim_plan=hidden_dim,
-        device=device
-    )
-    
-    input_dims = InputDims(
+    input_dims = PlanModelInputDims(
+        feature_statistics=feature_statistics,
+        dim_word_embedding=64,
         dim_word_hash=1000,
-        dim_word_emdb=64,
         dim_bitmaps=1000
     )
     
@@ -314,7 +468,7 @@ def run_training(
             batch = tuple(b.to(device) for b in batch)
             labels = labels.to(device)
             
-            predictions = model(batch)
+            predictions = model(batch).squeeze(-1)  # [batch, 1] -> [batch]
             loss = criterion(predictions, labels)
             loss.backward()
             optimizer.step()
@@ -334,10 +488,12 @@ def run_training(
                 labels = labels.to(device)
                 
                 predictions = model(batch)
-                loss = criterion(predictions, labels)
+                # Squeeze before loss and metrics
+                predictions_squeezed = predictions.squeeze(-1)  # [batch, 1] -> [batch]
+                loss = criterion(predictions_squeezed, labels)
                 val_loss += loss.item()
                 
-                all_preds.append(predictions.cpu().numpy())
+                all_preds.append(predictions_squeezed.cpu().numpy())
                 all_labels.append(labels.cpu().numpy())
         
         avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0.0

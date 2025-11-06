@@ -283,23 +283,18 @@ def _add_numerical_scalers(feature_statistics: dict):
     This is copied from postgres_plan_batching.py for compatibility.
     """
     from sklearn.preprocessing import RobustScaler
-    from sklearn.pipeline import Pipeline
+    from training.preprocessing.feature_statistics import FeatureType
     
     if feature_statistics is None:
         return
     
-    # Add scalers for numerical features if not already present
-    numerical_features = [
-        'est_card', 'act_card', 'est_width', 'est_cost',
-        'reltuples', 'relpages', 'avg_width', 'n_distinct', 'null_frac'
-    ]
-    
-    for feat_name in numerical_features:
-        if feat_name in feature_statistics:
-            if not isinstance(feature_statistics[feat_name], Pipeline):
-                # Create a simple pass-through for now
-                # In production, this would fit on training data
-                pass
+    # Exactly the same as original implementation
+    for k, v in feature_statistics.items():
+        if v.get('type') == str(FeatureType.numeric):
+            scaler = RobustScaler()
+            scaler.center_ = v['center']
+            scaler.scale_ = v['scale']
+            feature_statistics[k]['scaler'] = scaler
 
 
 def _append_with_offset(

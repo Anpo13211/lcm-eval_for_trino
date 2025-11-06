@@ -27,6 +27,7 @@ def recursively_convert_plan_unified(
     dbms_name: str,
     feature_statistics: dict,
     db_statistics: StandardizedStatistics,
+    column_statistics: dict = None,
     dim_word_embedding: int = 64,
     dim_word_hash: int = 1000,
     word_embeddings = None,
@@ -75,12 +76,16 @@ def recursively_convert_plan_unified(
     # 3. Get cardinality estimates using FeatureMapper
     estimated_cardinality = feature_mapper.get_feature('estimated_cardinality', plan_parameters) or 1.0
     
-    # 4. Extract filter information
-    filter_info = []
-    encoded_filter_info = np.zeros(max_filter_number * 3)
-    encoded_histogram_info = np.zeros(max_filter_number * histogram_bin_size)
-    sample_bitmap_vec = np.zeros(dim_bitmaps)
+    # 4. Extract and encode filter information (use original implementation)
+    from models.query_former.dataloader import get_encoded_filter, get_encoded_histograms, get_sample_vector
     
+    empty_filter_vec = np.array([
+        feature_statistics['column']['max'] + 1,
+        feature_statistics['operator']['no_vals'] + 1,
+        0.0
+    ]).reshape(1, 3)
+    
+    filter_info = []
     filter_columns = None
     if isinstance(plan_parameters, dict):
         filter_columns = plan_parameters.get('filter_columns')
@@ -107,22 +112,63 @@ def recursively_convert_plan_unified(
         
         filter_info = parse_filter_information(filter_columns=filter_columns)
         
-        # Encode filters (simplified - full implementation would use column_statistics)
-        for i, (column, operator, literal) in enumerate(filter_info[:max_filter_number]):
-            op_str = str(operator) if operator else 'EQ'
-            op_id = feature_statistics.get('operator', {}).get('value_dict', {}).get(op_str, 0)
+        # Use original encoding functions
+        if column_statistics and db_statistics:
+            encoded_filter_info = get_encoded_filter(
+                filter_info=filter_info,
+                feature_statistics=feature_statistics,
+                column_statistics=column_statistics,
+                database_statistics=db_statistics
+            )
             
-            encoded_filter_info[i*3] = op_id
-            encoded_filter_info[i*3+1] = column if isinstance(column, int) else 0
-            encoded_filter_info[i*3+2] = 0.0  # Literal (simplified)
+            encoded_histogram_info = get_encoded_histograms(
+                filter_info=filter_info,
+                column_statistics=column_statistics,
+                database_statistics=db_statistics,
+                histogram_bucket_size=histogram_bin_size
+            )
+        else:
+            # Fallback to simplified encoding
+            encoded_filter_info = empty_filter_vec
+            for i, (column, operator, literal) in enumerate(filter_info[:max_filter_number]):
+                if i > 0:
+                    encoded_filter_info = np.concatenate([encoded_filter_info, empty_filter_vec])
+            encoded_histogram_info = np.zeros(shape=(max_filter_number, histogram_bin_size))
+        
+        # Get sample vector from plan
+        sample_vec_raw = None
+        if isinstance(plan_parameters, dict):
+            sample_vec_raw = plan_parameters.get('sample_vec')
+        else:
+            sample_vec_raw = getattr(plan_parameters, 'sample_vec', None)
+        
+        sample_bitmap_vec = get_sample_vector(sample_vec_raw, dim_bitmaps)
+        
+        # Pad filter info to max_filter_number
+        for i in range(len(filter_info), max_filter_number):
+            encoded_filter_info = np.concatenate([encoded_filter_info, empty_filter_vec])
+            if encoded_histogram_info.ndim == 2:
+                encoded_histogram_info = np.concatenate([encoded_histogram_info, np.zeros(shape=(1, histogram_bin_size))])
+    else:
+        # No filters
+        encoded_filter_info = empty_filter_vec
+        encoded_histogram_info = np.zeros(shape=(1, histogram_bin_size))
+        sample_bitmap_vec = np.ones(dim_bitmaps)
+        
+        for i in range(1, max_filter_number):
+            encoded_filter_info = np.concatenate([encoded_filter_info, empty_filter_vec])
+            encoded_histogram_info = np.concatenate([encoded_histogram_info, np.zeros(shape=(1, histogram_bin_size))])
     
-    # 5. Create TreeNode
+    # Create filter mask (1 for real filters, 0 for padding)
+    filter_mask = np.concatenate((np.ones(len(filter_info)), np.zeros(max_filter_number - len(filter_info))))
+    
+    # 5. Create TreeNode (using original TreeNode from utils.py)
     tree_node = TreeNode(
         operator_type_id=operator_type_id,
         filter_info=encoded_filter_info,
-        sample_vec=sample_bitmap_vec,
+        filter_mask=filter_mask,
+        sample_bitmap_vec=sample_bitmap_vec,
         histogram_info=encoded_histogram_info,
-        estimated_cardinality=estimated_cardinality,
         table_name=table_name
     )
     
@@ -137,6 +183,7 @@ def recursively_convert_plan_unified(
             dbms_name=dbms_name,
             feature_statistics=feature_statistics,
             db_statistics=db_statistics,
+            column_statistics=column_statistics,
             dim_word_embedding=dim_word_embedding,
             dim_word_hash=dim_word_hash,
             word_embeddings=word_embeddings,
@@ -156,11 +203,16 @@ def encode_query_plan_unified(
     dbms_name: str,
     feature_statistics: dict,
     db_statistics: StandardizedStatistics,
+    column_statistics: dict = None,
     max_node: int = 30,
     rel_pos_max: int = 20,
     max_filter_number: int = 5,
     max_num_joins: int = 5,
     histogram_bin_size: int = 10,
+    dim_word_embedding: int = 64,
+    dim_word_hash: int = 1000,
+    word_embeddings = None,
+    dim_bitmaps: int = 1000,
     **kwargs
 ):
     """
@@ -187,9 +239,13 @@ def encode_query_plan_unified(
         dbms_name=dbms_name,
         feature_statistics=feature_statistics,
         db_statistics=db_statistics,
+        column_statistics=column_statistics,
+        dim_word_embedding=dim_word_embedding,
+        dim_word_hash=dim_word_hash,
+        word_embeddings=word_embeddings,
+        dim_bitmaps=dim_bitmaps,
         max_filter_number=max_filter_number,
-        histogram_bin_size=histogram_bin_size,
-        **kwargs
+        histogram_bin_size=histogram_bin_size
     )
     
     # Get adjacency matrix and features
@@ -215,6 +271,23 @@ def encode_query_plan_unified(
         shortest_path_result = floyd_warshall_transform(boolean_adjacency.numpy())
     
     rel_pos = torch.from_numpy(shortest_path_result).long()
+    
+    # Apply relative distance mask (same as original)
+    attention_bias[1:, 1:][rel_pos >= rel_pos_max] = float('-inf')
+    # Guard against rows being fully masked causing NaNs in attention
+    attention_bias[attention_bias == float('-inf')] = -1e9
+    
+    # Pad tensors to fixed sizes for batching (same as original implementation)
+    from models.query_former.utils import (
+        pad_attn_bias_unsqueeze,
+        pad_rel_pos_unsqueeze,
+        pad_1d_unsqueeze,
+        pad_2d_unsqueeze,
+    )
+    attention_bias = pad_attn_bias_unsqueeze(attention_bias, max_node + 1)
+    rel_pos = pad_rel_pos_unsqueeze(rel_pos, max_node)
+    node_heights = pad_1d_unsqueeze(node_heights, max_node)
+    features = pad_2d_unsqueeze(features, max_node)
     
     return features, join_ids, attention_bias, rel_pos, node_heights
 
