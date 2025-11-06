@@ -232,7 +232,7 @@ def train_epoch(model, train_loader, optimizer, device, epoch):
     for batch in pbar:
         # マルチタスク対応: 要素数で判定（後方互換性あり）
         if len(batch) == 6:
-            # 従来の形式
+            # 従来の形式（wall timeのみ）
             seq_encodings, attention_masks, loss_masks, run_times, labels, sample_idxs = batch
             seq_encodings = seq_encodings.to(device)
             attention_masks = attention_masks.to(device)
@@ -240,8 +240,8 @@ def train_epoch(model, train_loader, optimizer, device, epoch):
             run_times = run_times.to(device)
             labels = labels.to(device)
             model_input = (seq_encodings, attention_masks, loss_masks, run_times)
-        else:
-            # マルチタスク形式
+        elif len(batch) == 9:
+            # マルチタスク形式（旧形式: loss_mask_multitaskなし）
             seq_encodings, attention_masks, loss_masks, run_times, cpu_times, blocked_times, queued_times, labels, sample_idxs = batch
             seq_encodings = seq_encodings.to(device)
             attention_masks = attention_masks.to(device)
@@ -252,6 +252,19 @@ def train_epoch(model, train_loader, optimizer, device, epoch):
             queued_times = queued_times.to(device)
             labels = labels.to(device)
             model_input = (seq_encodings, attention_masks, loss_masks, run_times, cpu_times, blocked_times, queued_times)
+        else:
+            # マルチタスク形式（新形式: loss_mask_multitaskあり）
+            seq_encodings, attention_masks, loss_masks, loss_masks_multitask, run_times, cpu_times, blocked_times, queued_times, labels, sample_idxs = batch
+            seq_encodings = seq_encodings.to(device)
+            attention_masks = attention_masks.to(device)
+            loss_masks = loss_masks.to(device)
+            loss_masks_multitask = loss_masks_multitask.to(device)
+            run_times = run_times.to(device)
+            cpu_times = cpu_times.to(device)
+            blocked_times = blocked_times.to(device)
+            queued_times = queued_times.to(device)
+            labels = labels.to(device)
+            model_input = (seq_encodings, attention_masks, loss_masks, loss_masks_multitask, run_times, cpu_times, blocked_times, queued_times)
         
         # フォワードパス
         predictions = model(model_input)
@@ -283,7 +296,7 @@ def validate(model, val_loader, device):
         for batch in tqdm(val_loader, desc="Validation"):
             # マルチタスク対応: 要素数で判定（後方互換性あり）
             if len(batch) == 6:
-                # 従来の形式
+                # 従来の形式（wall timeのみ）
                 seq_encodings, attention_masks, loss_masks, run_times, labels, sample_idxs = batch
                 seq_encodings = seq_encodings.to(device)
                 attention_masks = attention_masks.to(device)
@@ -291,8 +304,8 @@ def validate(model, val_loader, device):
                 run_times = run_times.to(device)
                 labels = labels.to(device)
                 model_input = (seq_encodings, attention_masks, loss_masks, run_times)
-            else:
-                # マルチタスク形式
+            elif len(batch) == 9:
+                # マルチタスク形式（旧形式: loss_mask_multitaskなし）
                 seq_encodings, attention_masks, loss_masks, run_times, cpu_times, blocked_times, queued_times, labels, sample_idxs = batch
                 seq_encodings = seq_encodings.to(device)
                 attention_masks = attention_masks.to(device)
@@ -303,6 +316,19 @@ def validate(model, val_loader, device):
                 queued_times = queued_times.to(device)
                 labels = labels.to(device)
                 model_input = (seq_encodings, attention_masks, loss_masks, run_times, cpu_times, blocked_times, queued_times)
+            else:
+                # マルチタスク形式（新形式: loss_mask_multitaskあり）
+                seq_encodings, attention_masks, loss_masks, loss_masks_multitask, run_times, cpu_times, blocked_times, queued_times, labels, sample_idxs = batch
+                seq_encodings = seq_encodings.to(device)
+                attention_masks = attention_masks.to(device)
+                loss_masks = loss_masks.to(device)
+                loss_masks_multitask = loss_masks_multitask.to(device)
+                run_times = run_times.to(device)
+                cpu_times = cpu_times.to(device)
+                blocked_times = blocked_times.to(device)
+                queued_times = queued_times.to(device)
+                labels = labels.to(device)
+                model_input = (seq_encodings, attention_masks, loss_masks, loss_masks_multitask, run_times, cpu_times, blocked_times, queued_times)
             
             predictions = model(model_input)
             

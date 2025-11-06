@@ -54,7 +54,8 @@ class QLoss(nn.Module):
 class DaceLoss(nn.Module):
     def __init__(self,  model, **loss_kwargs):
         super().__init__()
-        self.loss_masks = None
+        self.loss_masks = None  # wall time用（ルートノードのみ）
+        self.loss_masks_multitask = None  # マルチタスク用（CPU/blocked/queued timeが存在する全ノード）
         self.preds = None
         self.real_run_times = None
         self.real_cpu_times = None
@@ -77,36 +78,38 @@ class DaceLoss(nn.Module):
         loss_main = torch.mean(loss_main)
         
         # マルチタスク損失（CPU, blocked, queued）
+        # マルチタスク用のloss maskを使用（CPU/blocked/queued timeが存在する全ノード）
+        loss_mask_for_multitask = self.loss_masks_multitask if self.loss_masks_multitask is not None else self.loss_masks
         loss_multitask = torch.tensor(0.0, device=self.real_run_times.device)
         
         if self.real_cpu_times is not None and input.shape[2] >= 2:
-            # CPU time損失
+            # CPU time損失（サブプランも使用）
             # input[:, :, 1] は Shape: (batch, seq_len) - 各ノードのCPU time予測
             loss_cpu = torch.max(input[:, :, 1] / (self.real_cpu_times + 1e-7), 
                                 (self.real_cpu_times + 1e-7) / input[:, :, 1])
-            loss_cpu = loss_cpu * self.loss_masks
+            loss_cpu = loss_cpu * loss_mask_for_multitask
             loss_cpu = torch.log(torch.where(loss_cpu > 1, loss_cpu, 1))
             loss_cpu = torch.sum(loss_cpu, dim=1)
             loss_cpu = torch.mean(loss_cpu)
             loss_multitask = loss_multitask + loss_cpu
         
         if self.real_blocked_times is not None and input.shape[2] >= 3:
-            # Blocked time損失
+            # Blocked time損失（サブプランも使用）
             # input[:, :, 2] は Shape: (batch, seq_len) - 各ノードのblocked time予測
             loss_blocked = torch.max(input[:, :, 2] / (self.real_blocked_times + 1e-7), 
                                     (self.real_blocked_times + 1e-7) / input[:, :, 2])
-            loss_blocked = loss_blocked * self.loss_masks
+            loss_blocked = loss_blocked * loss_mask_for_multitask
             loss_blocked = torch.log(torch.where(loss_blocked > 1, loss_blocked, 1))
             loss_blocked = torch.sum(loss_blocked, dim=1)
             loss_blocked = torch.mean(loss_blocked)
             loss_multitask = loss_multitask + loss_blocked
         
         if self.real_queued_times is not None and input.shape[2] >= 4:
-            # Queued time損失
+            # Queued time損失（サブプランも使用）
             # input[:, :, 3] は Shape: (batch, seq_len) - 各ノードのqueued time予測
             loss_queued = torch.max(input[:, :, 3] / (self.real_queued_times + 1e-7), 
                                    (self.real_queued_times + 1e-7) / input[:, :, 3])
-            loss_queued = loss_queued * self.loss_masks
+            loss_queued = loss_queued * loss_mask_for_multitask
             loss_queued = torch.log(torch.where(loss_queued > 1, loss_queued, 1))
             loss_queued = torch.sum(loss_queued, dim=1)
             loss_queued = torch.mean(loss_queued)

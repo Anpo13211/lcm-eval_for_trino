@@ -136,13 +136,14 @@ def dace_collator_trino(batch: Tuple, feature_statistics: dict, config: DACEMode
 
     labels, sample_idxs, seq_encodings, attention_masks, loss_masks = [], [], [], [], []
     all_runtimes, all_cpu_times, all_blocked_times, all_queued_times = [], [], [], []
+    loss_masks_multitask = []  # マルチタスク用のloss mask
 
     for sample_idx, p in batch:
         sample_idxs.append(sample_idx)
         
         if multitask_mode:
             # マルチタスク形式: CPU, blocked, queued timeも取得
-            seq_encoding, attention_mask, loss_mask, run_times, cpu_times, blocked_times, queued_times = get_plan_encoding_trino(
+            seq_encoding, attention_mask, loss_mask_runtime, loss_mask_multitask, run_times, cpu_times, blocked_times, queued_times = get_plan_encoding_trino(
                 query_plan=p,
                 model_config=config,
                 op_name_to_one_hot=op_name_to_one_hot,
@@ -152,6 +153,10 @@ def dace_collator_trino(batch: Tuple, feature_statistics: dict, config: DACEMode
             all_cpu_times.append(cpu_times)
             all_blocked_times.append(blocked_times)
             all_queued_times.append(queued_times)
+            # マルチタスク用のloss maskも保存（損失関数で使用）
+            loss_masks_multitask.append(loss_mask_multitask)
+            # wall time用のloss mask
+            loss_masks.append(loss_mask_runtime)
         else:
             # 従来形式: wall timeのみ
             seq_encoding, attention_mask, loss_mask, run_times = get_plan_encoding_trino_legacy(
@@ -161,13 +166,13 @@ def dace_collator_trino(batch: Tuple, feature_statistics: dict, config: DACEMode
                 plan_parameters=config.featurization.PLAN_FEATURES,
                 feature_statistics=feature_statistics
             )
+            loss_masks.append(loss_mask)
         
         # Trinoでは全体の実行時間のみを使用
         labels.append(torch.tensor(p.plan_runtime) / 1000)
         all_runtimes.append(run_times)
         seq_encodings.append(seq_encoding)
         attention_masks.append(attention_mask)
-        loss_masks.append(loss_mask)
 
     labels = torch.stack(labels)
     all_runtimes = torch.stack(all_runtimes)
@@ -179,7 +184,9 @@ def dace_collator_trino(batch: Tuple, feature_statistics: dict, config: DACEMode
         all_cpu_times = torch.stack(all_cpu_times)
         all_blocked_times = torch.stack(all_blocked_times)
         all_queued_times = torch.stack(all_queued_times)
-        return seq_encodings, attention_masks, loss_masks, all_runtimes, all_cpu_times, all_blocked_times, all_queued_times, labels, sample_idxs
+        loss_masks_multitask = torch.stack(loss_masks_multitask)
+        # マルチタスク形式: 10要素（loss_mask_multitaskも含む）
+        return seq_encodings, attention_masks, loss_masks, loss_masks_multitask, all_runtimes, all_cpu_times, all_blocked_times, all_queued_times, labels, sample_idxs
     else:
         # 従来形式: 6要素のみを返す
         return seq_encodings, attention_masks, loss_masks, all_runtimes, labels, sample_idxs
@@ -226,7 +233,7 @@ def get_loss_mask_trino(seq_length: int,
                         heights: list,
                         loss_weight: float = 0.5) -> torch.Tensor:
     """
-    Trino向けのloss mask生成関数
+    Trino向けのloss mask生成関数（wall time用）
     
     Trinoではサブプランの実行時間が取れないため、
     ルートノード（index 0）のみに重み1.0を設定し、
@@ -240,7 +247,7 @@ def get_loss_mask_trino(seq_length: int,
         loss_weight: 重み（Trinoモードでは使用しない）
     
     Returns:
-        loss_mask: ルートノードのみ1.0、他は0.0のマスク
+        loss_mask: ルートノードのみ1.0、他は0.0のマスク（wall time用）
     """
     seq_length = int(seq_length / node_length)
     loss_mask = np.zeros(pad_length)
@@ -248,6 +255,55 @@ def get_loss_mask_trino(seq_length: int,
     # Trinoモード: ルートノード（index 0）のみ重み1.0を設定
     if seq_length > 0:
         loss_mask[0] = 1.0
+    
+    loss_mask = torch.from_numpy(loss_mask).float()
+    return loss_mask
+
+
+def get_loss_mask_multitask_trino(seq_length: int,
+                                  pad_length: int,
+                                  node_length: int,
+                                  heights: list,
+                                  cpu_times: torch.Tensor,
+                                  blocked_times: torch.Tensor,
+                                  queued_times: torch.Tensor,
+                                  loss_weight: float = 0.5) -> torch.Tensor:
+    """
+    Trino向けのマルチタスクloss mask生成関数
+    
+    CPU time、blocked time、queued timeは各オペレータで取得できるため、
+    これらの値が存在する（0より大きい）ノードに重みを設定する。
+    重みは元のコードと同様に、ルートから離れるほど小さくなる（loss_weight^height）。
+    
+    Args:
+        seq_length: シーケンス長（ノード特徴量の合計長）
+        pad_length: パディング後の長さ（ノード数）
+        node_length: 1ノードあたりの特徴量長
+        heights: 各ノードの高さ（ルートノードは0）
+        cpu_times: CPU時間のテンソル（正規化済み）
+        blocked_times: Blocked時間のテンソル（正規化済み）
+        queued_times: Queued時間のテンソル（正規化済み）
+        loss_weight: 重み（デフォルト: 0.5）- ルートから離れるほど小さくなる
+    
+    Returns:
+        loss_mask: CPU/blocked/queued timeが存在するノードにloss_weight^height、他は0.0のマスク
+    """
+    seq_length = int(seq_length / node_length)
+    loss_mask = np.zeros(pad_length)
+    
+    # CPU、blocked、queued timeのいずれかが0より大きいノードにマスクを設定
+    # 正規化済みなので、1e-7より大きい値があれば有効とみなす
+    # 重みは元のコードと同様に、ルートから離れるほど小さくなる
+    for i in range(min(seq_length, pad_length, len(heights))):
+        cpu_val = cpu_times[i].item() if isinstance(cpu_times, torch.Tensor) else cpu_times[i]
+        blocked_val = blocked_times[i].item() if isinstance(blocked_times, torch.Tensor) else blocked_times[i]
+        queued_val = queued_times[i].item() if isinstance(queued_times, torch.Tensor) else queued_times[i]
+        
+        # いずれかの値が有効（正規化後の1e-7より大きい）なら、そのノードを使用
+        # 重みは高さに応じて減衰（loss_weight^height）
+        if cpu_val > 1e-7 or blocked_val > 1e-7 or queued_val > 1e-7:
+            height = heights[i] if i < len(heights) else 0
+            loss_mask[i] = np.power(loss_weight, height)
     
     loss_mask = torch.from_numpy(loss_mask).float()
     return loss_mask
@@ -500,13 +556,19 @@ def get_plan_sequence_trino(plan: SimpleNamespace, pad_length: int = 20) -> Tupl
     heights = []  # the height of each node, root node's height is 0
     depth_first_search_trino(plan, seq, adjs, -1, run_times, cpu_times, blocked_times, queued_times, heights, 0)
 
-    # padding all time lists to the same length
+    # padding all time lists and heights to the same length
     if len(run_times) < pad_length:
         pad_length_diff = pad_length - len(run_times)
         run_times = run_times + [0.0] * pad_length_diff
         cpu_times = cpu_times + [0.0] * pad_length_diff
         blocked_times = blocked_times + [0.0] * pad_length_diff
         queued_times = queued_times + [0.0] * pad_length_diff
+        # heightsもパディング（パディング部分は最後の高さ+1を使用、または0）
+        if len(heights) > 0:
+            # パディング部分は最後の高さ+1を使用（存在しないノードなので、より深い高さとして扱う）
+            heights = heights + [heights[-1] + 1] * pad_length_diff
+        else:
+            heights = heights + [0] * pad_length_diff
     return seq, run_times, cpu_times, blocked_times, queued_times, adjs, heights
 
 
@@ -545,6 +607,7 @@ def depth_first_search_trino(plan: SimpleNamespace, seq: list, adjs: list,
         from types import SimpleNamespace
         seq.append(SimpleNamespace(op_name="Unknown", est_rows=0, est_cost=0))
     
+    # 高さを追加（seqと同じ順序で追加されるように、seq.append()の後）
     heights.append(cur_height)
     
     # Trinoの実行時間を取得
@@ -567,15 +630,49 @@ def depth_first_search_trino(plan: SimpleNamespace, seq: list, adjs: list,
     if hasattr(plan, 'plan_parameters'):
         params = plan.plan_parameters
         # CPU時間（act_cpu_timeまたはact_scheduled_time）
-        cpu_time = getattr(params, 'act_cpu_time', None)
-        if cpu_time is None:
+        # 安全に値を取得し、Noneの場合は0.0にフォールバック
+        if hasattr(params, 'act_cpu_time'):
+            cpu_time = getattr(params, 'act_cpu_time', 0.0)
+            if cpu_time is None:
+                cpu_time = 0.0
+        elif hasattr(params, 'act_scheduled_time'):
             cpu_time = getattr(params, 'act_scheduled_time', 0.0)
+            if cpu_time is None:
+                cpu_time = 0.0
+        else:
+            cpu_time = 0.0
+        
+        # 数値型に変換（文字列やその他の型の場合に対応）
+        try:
+            cpu_time = float(cpu_time) if cpu_time is not None else 0.0
+        except (ValueError, TypeError):
+            cpu_time = 0.0
         
         # Blocked時間
-        blocked_time = getattr(params, 'act_blocked_time', 0.0)
+        if hasattr(params, 'act_blocked_time'):
+            blocked_time = getattr(params, 'act_blocked_time', 0.0)
+            if blocked_time is None:
+                blocked_time = 0.0
+        else:
+            blocked_time = 0.0
+        
+        try:
+            blocked_time = float(blocked_time) if blocked_time is not None else 0.0
+        except (ValueError, TypeError):
+            blocked_time = 0.0
         
         # Queued時間（Trinoでは通常0だが、取得できる場合は使用）
-        queued_time = getattr(params, 'act_queued_time', 0.0)
+        if hasattr(params, 'act_queued_time'):
+            queued_time = getattr(params, 'act_queued_time', 0.0)
+            if queued_time is None:
+                queued_time = 0.0
+        else:
+            queued_time = 0.0
+        
+        try:
+            queued_time = float(queued_time) if queued_time is not None else 0.0
+        except (ValueError, TypeError):
+            queued_time = 0.0
     
     cpu_times.append(cpu_time)
     blocked_times.append(blocked_time)
@@ -653,7 +750,7 @@ def get_plan_encoding_trino(query_plan: SimpleNamespace,
                             model_config: DACEModelConfig,
                             op_name_to_one_hot: dict,
                             plan_parameters: list,
-                            feature_statistics: dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+                            feature_statistics: dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Trino向けのプランエンコーディング関数（マルチタスク対応）
     
@@ -669,7 +766,8 @@ def get_plan_encoding_trino(query_plan: SimpleNamespace,
     Returns:
         seq_encoding: エンコード済みシーケンス
         attention_mask: Attention mask
-        loss_mask: Loss mask（Trinoではルートノードのみ1.0）
+        loss_mask_runtime: Loss mask（wall time用: ルートノードのみ1.0）
+        loss_mask_multitask: Loss mask（マルチタスク用: CPU/blocked/queued timeが存在する全ノードに1.0）
         run_times: 実行時間（正規化済み）
         cpu_times: CPU時間（正規化済み）
         blocked_times: Blocked時間（正規化済み）
@@ -709,12 +807,22 @@ def get_plan_encoding_trino(query_plan: SimpleNamespace,
                                         model_config.node_length,
                                         heights)
 
-    # loss maskを取得（Trinoモード: ルートノードのみ1.0）
-    loss_mask = get_loss_mask_trino(seq_length,
-                                    model_config.pad_length,
-                                    model_config.node_length,
-                                    heights,
-                                    model_config.loss_weight)
+    # loss maskを取得（wall time用: ルートノードのみ1.0）
+    loss_mask_runtime = get_loss_mask_trino(seq_length,
+                                            model_config.pad_length,
+                                            model_config.node_length,
+                                            heights,
+                                            model_config.loss_weight)
+    
+    # マルチタスク用のloss mask（CPU/blocked/queued timeが存在するノードにloss_weight^height）
+    loss_mask_multitask = get_loss_mask_multitask_trino(seq_length,
+                                                        model_config.pad_length,
+                                                        model_config.node_length,
+                                                        heights,
+                                                        cpu_times,
+                                                        blocked_times,
+                                                        queued_times,
+                                                        model_config.loss_weight)
 
-    return seq_encoding, attention_mask, loss_mask, run_times, cpu_times, blocked_times, queued_times
+    return seq_encoding, attention_mask, loss_mask_runtime, loss_mask_multitask, run_times, cpu_times, blocked_times, queued_times
 

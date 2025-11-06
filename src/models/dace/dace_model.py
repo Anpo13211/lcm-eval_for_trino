@@ -62,19 +62,31 @@ class DACELora(nn.Module):
         return out  # Shape: (batch, seq_len, 4)
 
     def forward(self, x, attn_mask=None):
-        # マルチタスク対応: 4つの時系列データを受け取る
+        # マルチタスク対応: 要素数で判定
         if len(x) == 4:
-            # 従来の形式（後方互換性）
+            # 従来の形式（後方互換性: wall timeのみ）
             seq_encodings, attention_masks, loss_masks, real_run_times = x
             self.loss_fxn.loss_masks = loss_masks
+            self.loss_fxn.loss_masks_multitask = None  # マルチタスク用のloss maskなし
             self.loss_fxn.real_run_times = real_run_times
             self.loss_fxn.real_cpu_times = None
             self.loss_fxn.real_blocked_times = None
             self.loss_fxn.real_queued_times = None
+        elif len(x) == 8:
+            # マルチタスク形式（新形式: loss_mask_multitaskあり）
+            seq_encodings, attention_masks, loss_masks, loss_masks_multitask, real_run_times, real_cpu_times, real_blocked_times, real_queued_times = x
+            self.loss_fxn.loss_masks = loss_masks  # wall time用（ルートノードのみ）
+            self.loss_fxn.loss_masks_multitask = loss_masks_multitask  # マルチタスク用（高さに応じて減衰）
+            self.loss_fxn.real_run_times = real_run_times
+            self.loss_fxn.real_cpu_times = real_cpu_times
+            self.loss_fxn.real_blocked_times = real_blocked_times
+            self.loss_fxn.real_queued_times = real_queued_times
         else:
-            # マルチタスク形式（新形式）
-            seq_encodings, attention_masks, loss_masks, real_run_times, real_cpu_times, real_blocked_times, real_queued_times = x
+            # マルチタスク形式（旧形式: loss_mask_multitaskなし、9要素）
+            # この形式は後方互換性のために残しているが、実際には使用されない
+            seq_encodings, attention_masks, loss_masks, real_run_times, real_cpu_times, real_blocked_times, real_queued_times = x[:7]
             self.loss_fxn.loss_masks = loss_masks
+            self.loss_fxn.loss_masks_multitask = loss_masks  # 後方互換性: loss_masksと同じを使用
             self.loss_fxn.real_run_times = real_run_times
             self.loss_fxn.real_cpu_times = real_cpu_times
             self.loss_fxn.real_blocked_times = real_blocked_times
