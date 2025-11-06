@@ -86,8 +86,22 @@ def plan_to_graphs(column_statistics, word_embeddings, db_statistics, feature_st
 def extract_dimensions(feature_statistics, extended=False):
     dim_pred_op = feature_statistics['operator']['no_vals']
     dim_ops = feature_statistics['op_name']['no_vals']
-    dim_cols = max(int(feature_statistics['columns']['max']), int(feature_statistics['column']['max'])) + 1
+    
+    # 'columns' and 'column' can be either categorical (with 'no_vals') or numeric (with 'max')
+    # Handle both cases
+    if 'max' in feature_statistics.get('columns', {}):
+        dim_cols_1 = int(feature_statistics['columns']['max'])
+    else:
+        dim_cols_1 = feature_statistics.get('columns', {}).get('no_vals', 0)
+    
+    if 'max' in feature_statistics.get('column', {}):
+        dim_cols_2 = int(feature_statistics['column']['max'])
+    else:
+        dim_cols_2 = feature_statistics.get('column', {}).get('no_vals', 0)
+    
+    dim_cols = max(dim_cols_1, dim_cols_2) + 1
     dim_tables = int(feature_statistics['table']['max']) + 1
+    
     if extended:
         dim_joins = feature_statistics['join_conds']['no_vals']
         dim_aggs = feature_statistics['aggregation']['no_vals']

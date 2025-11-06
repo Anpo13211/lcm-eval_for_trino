@@ -255,9 +255,20 @@ def build_feature_statistics(train_plans_dict, train_plans):
     
     # feature_statisticsの互換性チェック
     if 'column' in feature_statistics and 'max' not in feature_statistics['column']:
-        feature_statistics['column']['max'] = feature_statistics['column']['no_vals'] - 1
+        if 'no_vals' in feature_statistics['column']:
+            feature_statistics['column']['max'] = feature_statistics['column']['no_vals'] - 1
+        else:
+            feature_statistics['column']['max'] = 0
     if 'columns' not in feature_statistics:
         feature_statistics['columns'] = feature_statistics.get('column', {'max': 0})
+    # columnsにもmaxキーを確実に設定
+    if 'columns' in feature_statistics and 'max' not in feature_statistics['columns']:
+        if 'column' in feature_statistics and 'max' in feature_statistics['column']:
+            feature_statistics['columns']['max'] = feature_statistics['column']['max']
+        elif 'columns' in feature_statistics and 'no_vals' in feature_statistics['columns']:
+            feature_statistics['columns']['max'] = feature_statistics['columns']['no_vals'] - 1
+        else:
+            feature_statistics['columns']['max'] = 0
     if 'tablename' not in feature_statistics:
         feature_statistics['tablename'] = {'value_dict': {}, 'no_vals': 0, 'type': 'categorical'}
     
@@ -409,15 +420,12 @@ def parse_and_prepare_data(
     # 統計情報を先に読み込む（カラムIDマッピングを作成するため）
     print(f"統計情報を読み込み中（{dataset}）...")
     
-    # zero-shot_datasets配下のcolumn_statistics.jsonを読み込む（Postgresと同じ形式）
-    # Docker環境とローカル環境の両方に対応
-    zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
-    zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
-    if not zero_shot_col_stats_path.exists():
-        raise FileNotFoundError(f"column_statistics.jsonが見つかりません: {zero_shot_col_stats_path}")
+    # column_statisticsを読み込む（Trino統計を優先）
+    from cross_db_benchmark.benchmark_tools.utils import load_column_statistics
+    prefer_trino = os.getenv('PREFER_TRINO_STATS', 'true').lower() in ('true', '1', 'yes')
+    print(f"  PREFER_TRINO_STATS: {prefer_trino}")
     
-    with open(zero_shot_col_stats_path) as f:
-        zero_shot_column_stats = json.load(f)
+    zero_shot_column_stats = load_column_statistics(dataset, namespace=False, prefer_trino=prefer_trino)
     
     # テーブルサンプルとカラム統計を準備
     print(f"テーブルサンプルを取得中（{dataset}）...")
@@ -648,21 +656,22 @@ def parse_all_datasets_once(
     combined_table_stats = []
     
     def load_stats_and_prepare_ids(dataset: str):
-        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
-        zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
-        if not zero_shot_col_stats_path.exists():
-            zero_shot_column_stats = {}
-            table_stats_dict = {}
-        else:
-            with open(zero_shot_col_stats_path) as f:
-                zero_shot_column_stats = json.load(f)
+        from cross_db_benchmark.benchmark_tools.utils import load_column_statistics
+        prefer_trino = os.getenv('PREFER_TRINO_STATS', 'true').lower() in ('true', '1', 'yes')
+        
+        try:
+            zero_shot_column_stats = load_column_statistics(dataset, namespace=False, prefer_trino=prefer_trino)
             
+            # table_stats.jsonはdatasets_statisticsから読み込む
             stats_dir = Path('src').parent / 'datasets_statistics' / f'iceberg_{dataset}'
             if stats_dir.exists():
                 with open(stats_dir / 'table_stats.json') as f:
                     table_stats_dict = json.load(f)
             else:
                 table_stats_dict = {}
+        except FileNotFoundError:
+            zero_shot_column_stats = {}
+            table_stats_dict = {}
         
         for table_name, tstats in table_stats_dict.items():
             combined_table_stats.append(SimpleNamespace(
@@ -708,12 +717,12 @@ def parse_all_datasets_once(
     def parse_plans_for_dataset(dataset: str, files: list):
         column_stats_dict, table_stats_dict, column_id_mapping_ds, partial_col_map_ds = load_stats_and_prepare_ids(dataset)
         
-        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
-        zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
-        zero_shot_column_stats = {}
-        if zero_shot_col_stats_path.exists():
-            with open(zero_shot_col_stats_path) as f:
-                zero_shot_column_stats = json.load(f)
+        from cross_db_benchmark.benchmark_tools.utils import load_column_statistics
+        prefer_trino = os.getenv('PREFER_TRINO_STATS', 'true').lower() in ('true', '1', 'yes')
+        try:
+            zero_shot_column_stats = load_column_statistics(dataset, namespace=False, prefer_trino=prefer_trino)
+        except FileNotFoundError:
+            zero_shot_column_stats = {}
         
         table_samples = None
         col_stats_ns = []
@@ -826,16 +835,12 @@ def parse_and_prepare_leave_one_out(
     
     # Helper to load stats and build global column ids for a dataset
     def load_stats_and_prepare_ids(dataset: str):
-        # zero-shot_datasets配下のcolumn_statistics.jsonを読み込む
-        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
-        zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
-        if not zero_shot_col_stats_path.exists():
-            # No stats available; return empty dicts and mappings
-            zero_shot_column_stats = {}
-            table_stats_dict = {}
-        else:
-            with open(zero_shot_col_stats_path) as f:
-                zero_shot_column_stats = json.load(f)
+        # column_statisticsを読み込む（Trino統計を優先）
+        from cross_db_benchmark.benchmark_tools.utils import load_column_statistics
+        prefer_trino = os.getenv('PREFER_TRINO_STATS', 'true').lower() in ('true', '1', 'yes')
+        
+        try:
+            zero_shot_column_stats = load_column_statistics(dataset, namespace=False, prefer_trino=prefer_trino)
             
             # table_stats.jsonはdatasets_statisticsから読み込む
             stats_dir = Path('src').parent / 'datasets_statistics' / f'iceberg_{dataset}'
@@ -844,6 +849,9 @@ def parse_and_prepare_leave_one_out(
                     table_stats_dict = json.load(f)
             else:
                 table_stats_dict = {}
+        except FileNotFoundError:
+            zero_shot_column_stats = {}
+            table_stats_dict = {}
         
         # Build table stats entries (with dataset prefix)
         for table_name, tstats in table_stats_dict.items():
@@ -896,13 +904,13 @@ def parse_and_prepare_leave_one_out(
     def parse_plans_for_dataset(dataset: str, files: list):
         column_stats_dict, table_stats_dict, column_id_mapping_ds, partial_col_map_ds = load_stats_and_prepare_ids(dataset)
         
-        # zero-shot形式のcolumn_statisticsを読み込んでcol_stats_nsを作成
-        zero_shot_base = os.getenv('ZERO_SHOT_DATASETS_DIR', '/Users/an/query_engine/lakehouse/zero-shot_datasets')
-        zero_shot_col_stats_path = Path(zero_shot_base) / dataset / 'column_statistics.json'
-        zero_shot_column_stats = {}
-        if zero_shot_col_stats_path.exists():
-            with open(zero_shot_col_stats_path) as f:
-                zero_shot_column_stats = json.load(f)
+        # column_statisticsを読み込んでcol_stats_nsを作成
+        from cross_db_benchmark.benchmark_tools.utils import load_column_statistics
+        prefer_trino = os.getenv('PREFER_TRINO_STATS', 'true').lower() in ('true', '1', 'yes')
+        try:
+            zero_shot_column_stats = load_column_statistics(dataset, namespace=False, prefer_trino=prefer_trino)
+        except FileNotFoundError:
+            zero_shot_column_stats = {}
         
         # Prepare table samples and simple col_stats namespaces for sample_vec generation (optional)
         table_samples = None
@@ -1158,6 +1166,22 @@ def train_queryformer_trino(
     # columnsエイリアスの確認
     if 'columns' not in feature_statistics:
         feature_statistics['columns'] = feature_statistics.get('column', {'max': 0})
+    # columnsにもmaxキーを確実に設定
+    if 'columns' in feature_statistics and 'max' not in feature_statistics['columns']:
+        if 'column' in feature_statistics and 'max' in feature_statistics['column']:
+            feature_statistics['columns']['max'] = feature_statistics['column']['max']
+        elif 'no_vals' in feature_statistics['columns']:
+            feature_statistics['columns']['max'] = feature_statistics['columns']['no_vals'] - 1
+        else:
+            feature_statistics['columns']['max'] = 0
+    # columnにもmaxキーを確実に設定（columnsからコピー）
+    if 'column' in feature_statistics and 'max' not in feature_statistics['column']:
+        if 'columns' in feature_statistics and 'max' in feature_statistics['columns']:
+            feature_statistics['column']['max'] = feature_statistics['columns']['max']
+        elif 'no_vals' in feature_statistics['column']:
+            feature_statistics['column']['max'] = feature_statistics['column']['no_vals'] - 1
+        else:
+            feature_statistics['column']['max'] = 0
     
     # モデル設定
     # Only pass allowed fields to the model config

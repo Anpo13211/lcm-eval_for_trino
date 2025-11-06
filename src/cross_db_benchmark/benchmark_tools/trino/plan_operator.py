@@ -180,6 +180,7 @@ class TrinoPlanOperator(AbstractPlanOperator):
                     self._set_param('columns', columns)
         
         # レイアウト情報を抽出（追加の行から）
+        # PostgreSQLと同様に、parse_linesの段階でoutput_columnsも生成する
         for line in self.plain_content[1:]:
             if 'Layout: [' in line:
                 layout_start = line.find('Layout: [')
@@ -190,6 +191,16 @@ class TrinoPlanOperator(AbstractPlanOperator):
                         layout_str = line[layout_start:layout_end]
                         layout = [col.strip() for col in layout_str.split(',')]
                         self._set_param('layout', layout)
+                        
+                        # Layoutからoutput_columnsを生成（PostgreSQLと同様）
+                        try:
+                            output_columns = self.parse_output_columns(layout_str)
+                            self._set_param('output_columns', output_columns)
+                        except Exception as e:
+                            # デバッグモード: エラーを出力
+                            import os
+                            if os.getenv('DEBUG_TRINO_PARSE', 'false').lower() == 'true':
+                                print(f"⚠️  Warning: Failed to parse output columns from layout: {e}")
                 break
         
         # 結合条件を抽出（Join演算子の場合）
@@ -235,7 +246,11 @@ class TrinoPlanOperator(AbstractPlanOperator):
                     try:
                         parse_tree = parse_filter(filter_condition, parse_baseline=parse_baseline)
                         self.add_filter(parse_tree, filter_type='predicate')
-                    except:
+                    except Exception as e:
+                        # デバッグモード: エラーを出力
+                        import os
+                        if os.getenv('DEBUG_TRINO_PARSE', 'false').lower() == 'true':
+                            print(f"⚠️  Warning: Failed to parse filter condition '{filter_condition}': {e}")
                         # フィルター条件の解析に失敗した場合は、生の文字列を保存
                         pass
         
@@ -260,7 +275,11 @@ class TrinoPlanOperator(AbstractPlanOperator):
                             parse_tree = parse_filter(filter_condition, parse_baseline=parse_baseline)
                             if parse_tree:
                                 self.add_filter(parse_tree, filter_type='dynamic')
-                        except:
+                        except Exception as e:
+                            # デバッグモード: エラーを出力
+                            import os
+                            if os.getenv('DEBUG_TRINO_PARSE', 'false').lower() == 'true':
+                                print(f"⚠️  Warning: Failed to parse dynamic filter '{filter_condition}': {e}")
                             # フィルター条件の解析に失敗した場合は、生の文字列を保存
                             pass
         
@@ -895,28 +914,26 @@ class TrinoPlanOperator(AbstractPlanOperator):
         if not self._has_param('workers_planned'):
             self._set_param('workers_planned', 1)
         
-        # 出力カラムの処理（エラーが発生しても続行）
-        try:
-            layout = self._get_param('layout')
-            if layout:
-                output_columns = self.parse_output_columns(','.join(layout))
-                for output_column in output_columns:
-                    col_ids = []
-                    for c in output_column['columns']:
-                        try:
-                            c_id = self.lookup_column_id(c, column_id_mapping, node_tables, partial_column_name_mapping, alias_dict)
-                            col_ids.append(c_id)
-                        except:
-                            if c[0] != 'subgb':
-                                # output_columnsの処理でエラーが発生しても続行（sample_vec生成のために）
-                                raise ValueError(f"Did not find unique table for column {c}")
-                    
-                    output_column['columns'] = col_ids
+        # 出力カラムの処理: parse_linesで既に生成されたoutput_columnsのカラムIDへの変換のみを行う
+        # PostgreSQLと同じロジック
+        output_columns = self._get_param('output_columns')
+        if output_columns is not None:
+            for output_column in output_columns:
+                col_ids = []
+                for c in output_column['columns']:
+                    try:
+                        c_id = self.lookup_column_id(c, column_id_mapping, node_tables, partial_column_name_mapping, alias_dict)
+                        col_ids.append(c_id)
+                    except Exception as e:
+                        # subgbは特殊なケースなのでスキップ
+                        if len(c) > 0 and c[0] != 'subgb':
+                            # デバッグモード: エラーを出力
+                            import os
+                            if os.getenv('DEBUG_TRINO_PARSE', 'false').lower() == 'true':
+                                print(f"⚠️  Warning: Could not find unique table for column {c}: {e}")
+                            # エラーを記録するが、処理は続行（PostgreSQLと異なり、例外を投げない）
                 
-                self._set_param('output_columns', output_columns)
-        except Exception:
-            # output_columnsの処理でエラーが発生しても続行（sample_vec生成のために）
-            pass
+                output_column['columns'] = col_ids
         
         # フィルターカラムの処理
         filter_columns = self._get_param('filter_columns')
