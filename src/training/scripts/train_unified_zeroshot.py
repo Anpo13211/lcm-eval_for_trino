@@ -339,9 +339,13 @@ def train_epoch(model, train_loader, optimizer, device):
             # Collator returns (graph, features, labels, sample_idxs)
             graph, features, labels, sample_idxs = batch
             
+            # Move to device (same as validation)
+            graph = graph.to(device)
+            features = {k: v.to(device) for k, v in features.items()}
+            labels = labels.to(device)
+            
             # Model expects (graph, features) tuple
             predictions = model((graph, features))
-            labels = labels.to(device)
             
             # Compute loss
             loss = model.loss_fxn(predictions, labels)
