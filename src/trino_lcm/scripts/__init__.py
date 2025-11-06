@@ -1,17 +1,8 @@
 """
-Trino Scripts
+Trino Scripts package
 
-Trinoクエリプラン向けの各種ユーティリティスクリプト。
+Only unified scripts are kept. No implicit submodule imports to avoid
+accidental circular imports when unused modules are removed.
 """
 
-from . import train_flat_vector
-from . import train_zeroshot
-from . import train_queryformer
-from . import train_dace
-
-__all__ = [
-    'train_flat_vector',
-    'train_zeroshot',
-    'train_queryformer',
-    'train_dace',
-]
+__all__ = []

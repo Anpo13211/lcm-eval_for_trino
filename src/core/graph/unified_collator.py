@@ -11,8 +11,10 @@ It uses UnifiedPlanConverter to convert plans to graphs in a DBMS-agnostic way.
 
 from typing import List, Dict, Any, Optional
 from types import SimpleNamespace
+import collections
 import numpy as np
 import torch
+import dgl
 
 from core.graph.converter import UnifiedPlanConverter
 from core.statistics.schema import StandardizedStatistics
@@ -159,11 +161,8 @@ def unified_plan_collator(
         column_offset += len(graph_data['column_features'])
         table_offset += len(graph_data['table_features'])
     
-    # Convert to tensors
-    labels = torch.tensor(labels, dtype=torch.float32)
-    
-    # Tensorize graph data
-    graph_tensors = _tensorize_graph_data(
+    # Create heterograph (DGL format)
+    graph, features = _create_heterograph(
         all_plan_depths,
         all_plan_features,
         all_plan_to_plan_edges,
@@ -180,11 +179,10 @@ def unified_plan_collator(
         all_logical_preds
     )
     
-    return {
-        'labels': labels,
-        **graph_tensors,
-        'sample_idxs': sample_idxs
-    }
+    # Process labels
+    labels = postprocess_labels(labels)
+    
+    return graph, features, labels, sample_idxs
 
 
 def _infer_dbms_name(plans: List[Any]) -> str:
@@ -360,65 +358,177 @@ def _append_with_offset(
     all_table_features.extend(graph_data['table_features'])
 
 
-def _tensorize_graph_data(
+def _create_heterograph(
     plan_depths, plan_features, plan_to_plan_edges,
     filter_to_plan_edges, predicate_col_features,
     output_column_to_plan_edges, output_column_features,
     column_to_output_column_edges, column_features,
     table_features, table_to_plan_edges,
     predicate_depths, intra_predicate_edges, logical_preds
-) -> Dict[str, torch.Tensor]:
+):
     """
-    Convert graph data to PyTorch tensors.
+    Create DGL heterograph from graph data.
+    
+    This is the unified version that works for all DBMS.
+    Based on postgres_plan_collator logic.
     """
-    result = {}
+    # Create node types per depth for plan nodes
+    data_dict, nodes_per_depth, plan_dict = create_node_types_per_depth(plan_depths, plan_to_plan_edges)
     
-    # Plan depths
-    if plan_depths:
-        result['plan_depths'] = torch.tensor(plan_depths, dtype=torch.long)
+    # Create node types for predicates
+    pred_dict = dict()
+    nodes_per_pred_depth = collections.defaultdict(int)
+    no_filter_columns = 0
     
-    # Plan features
-    if plan_features:
-        result['plan_features'] = torch.tensor(np.array(plan_features), dtype=torch.float32)
+    for pred_node, d in enumerate(predicate_depths):
+        if logical_preds[pred_node]:
+            # Logical predicate (AND/OR)
+            pred_dict[pred_node] = (nodes_per_pred_depth[d], d)
+            nodes_per_pred_depth[d] += 1
+        else:
+            # Filter column (comparison operator)
+            pred_dict[pred_node] = no_filter_columns
+            no_filter_columns += 1
     
-    # Edges
-    if plan_to_plan_edges:
-        result['plan_to_plan_edges'] = torch.tensor(plan_to_plan_edges, dtype=torch.long).T
+    # Adapt predicate edges
+    adapt_predicate_edges(data_dict, filter_to_plan_edges, intra_predicate_edges, 
+                         logical_preds, plan_dict, pred_dict, pred_node_type_id)
     
-    if filter_to_plan_edges:
-        result['filter_to_plan_edges'] = torch.tensor(filter_to_plan_edges, dtype=torch.long).T
+    # Add other edge types
+    data_dict[('column', 'col_output_col', 'output_column')] = column_to_output_column_edges
     
-    if output_column_to_plan_edges:
-        result['output_column_to_plan_edges'] = torch.tensor(output_column_to_plan_edges, dtype=torch.long).T
+    for u, v in output_column_to_plan_edges:
+        v_node_id, d_v = plan_dict[v]
+        data_dict[('output_column', 'to_plan', f'plan{d_v}')].append((u, v_node_id))
     
-    if column_to_output_column_edges:
-        result['column_to_output_column_edges'] = torch.tensor(column_to_output_column_edges, dtype=torch.long).T
+    for u, v in table_to_plan_edges:
+        v_node_id, d_v = plan_dict[v]
+        data_dict[('table', 'to_plan', f'plan{d_v}')].append((u, v_node_id))
     
-    if table_to_plan_edges:
-        result['table_to_plan_edges'] = torch.tensor(table_to_plan_edges, dtype=torch.long).T
+    # Calculate node counts
+    max_depth, max_pred_depth = get_depths(plan_depths, predicate_depths)
+    num_nodes_dict = {
+        'column': len(column_features),
+        'table': len(table_features),
+        'output_column': len(output_column_features),
+        'filter_column': len(logical_preds) - sum(logical_preds),
+    }
+    num_nodes_dict = update_node_counts(max_depth, max_pred_depth, nodes_per_depth, 
+                                       nodes_per_pred_depth, num_nodes_dict)
     
-    if intra_predicate_edges:
-        result['intra_predicate_edges'] = torch.tensor(intra_predicate_edges, dtype=torch.long).T
+    # Create heterograph
+    graph = dgl.heterograph(data_dict, num_nodes_dict=num_nodes_dict)
+    graph.max_depth = max_depth
+    graph.max_pred_depth = max_pred_depth
     
-    # Features
-    if predicate_col_features:
-        result['predicate_col_features'] = torch.tensor(np.array(predicate_col_features), dtype=torch.float32)
+    # Organize features by node type
+    features = collections.defaultdict(list)
+    features.update(dict(
+        column=column_features,
+        table=table_features,
+        output_column=output_column_features,
+        filter_column=[f for f, log_pred in zip(predicate_col_features, logical_preds) if not log_pred]
+    ))
     
-    if output_column_features:
-        result['output_column_features'] = torch.tensor(np.array(output_column_features), dtype=torch.float32)
+    # Sort plan features by depth
+    for u, plan_feat in enumerate(plan_features):
+        u_node_id, d_u = plan_dict[u]
+        features[f'plan{d_u}'].append(plan_feat)
     
-    if column_features:
-        result['column_features'] = torch.tensor(np.array(column_features), dtype=torch.float32)
+    # Sort predicate features by depth
+    for pred_node_id, pred_feat in enumerate(predicate_col_features):
+        if not logical_preds[pred_node_id]:
+            continue
+        node_type, _ = pred_node_type_id(logical_preds, pred_dict, pred_node_id)
+        features[node_type].append(pred_feat)
     
-    if table_features:
-        result['table_features'] = torch.tensor(np.array(table_features), dtype=torch.float32)
+    # Postprocess features
+    features = postprocess_feats(features, num_nodes_dict)
     
-    # Other
-    if predicate_depths:
-        result['predicate_depths'] = torch.tensor(predicate_depths, dtype=torch.long)
+    return graph, features
+
+
+def create_node_types_per_depth(plan_depths, plan_to_plan_edges):
+    """Create node types based on depth."""
+    plan_dict = dict()
+    nodes_per_depth = collections.defaultdict(int)
     
-    if logical_preds:
-        result['logical_preds'] = torch.tensor(logical_preds, dtype=torch.bool)
+    for plan_node, d in enumerate(plan_depths):
+        plan_dict[plan_node] = (nodes_per_depth[d], d)
+        nodes_per_depth[d] += 1
     
-    return result
+    # Create edge dict
+    data_dict = collections.defaultdict(list)
+    for u, v in plan_to_plan_edges:
+        u_node_id, d_u = plan_dict[u]
+        v_node_id, d_v = plan_dict[v]
+        assert d_v < d_u, f"Plan edges should go from deeper to shallower: {d_u} -> {d_v}"
+        data_dict[(f'plan{d_u}', f'intra_plan', f'plan{d_v}')].append((u_node_id, v_node_id))
+    
+    return data_dict, nodes_per_depth, plan_dict
+
+
+def adapt_predicate_edges(data_dict, filter_to_plan_edges, intra_predicate_edges, 
+                          logical_preds, plan_dict, pred_dict, pred_node_type_id_func):
+    """Adapt predicate edges to heterograph format."""
+    # Filter to plan edges
+    for u, v in filter_to_plan_edges:
+        v_node_id, d_v = plan_dict[v]
+        node_type, u_node_id = pred_node_type_id_func(logical_preds, pred_dict, u)
+        data_dict[(node_type, 'to_plan', f'plan{d_v}')].append((u_node_id, v_node_id))
+    
+    # Intra predicate edges
+    for u, v in intra_predicate_edges:
+        u_node_type, u_node_id = pred_node_type_id_func(logical_preds, pred_dict, u)
+        v_node_type, v_node_id = pred_node_type_id_func(logical_preds, pred_dict, v)
+        data_dict[(u_node_type, 'intra_predicate', v_node_type)].append((u_node_id, v_node_id))
+
+
+def pred_node_type_id(logical_preds, pred_dict, pred_node):
+    """Determine predicate node type and ID."""
+    if logical_preds[pred_node]:
+        # Logical predicate
+        node_id, depth = pred_dict[pred_node]
+        return f'logical_pred_{depth}', node_id
+    else:
+        # Filter column
+        return 'filter_column', pred_dict[pred_node]
+
+
+def update_node_counts(max_depth, max_pred_depth, nodes_per_depth, nodes_per_pred_depth, num_nodes_dict):
+    """Update node counts with depth-specific nodes."""
+    num_nodes_dict.update({f'plan{d}': nodes_per_depth[d] for d in range(max_depth + 1)})
+    num_nodes_dict.update({f'logical_pred_{d}': nodes_per_pred_depth[d] for d in range(max_pred_depth + 1)})
+    # Filter out zero nodes
+    num_nodes_dict = {k: v for k, v in num_nodes_dict.items() if v > 0}
+    return num_nodes_dict
+
+
+def get_depths(plan_depths, predicate_depths):
+    """Get maximum depths for plans and predicates."""
+    max_depth = max(plan_depths) if plan_depths else 0
+    max_pred_depth = max(predicate_depths) if predicate_depths else 0
+    return max_depth, max_pred_depth
+
+
+def postprocess_labels(labels):
+    """Convert labels to tensor (runtime in seconds)."""
+    labels = np.array(labels, dtype=np.float32)
+    labels /= 1000  # Convert ms to seconds
+    labels = torch.from_numpy(labels)  # Convert to tensor
+    return labels
+
+
+def postprocess_feats(features, num_nodes_dict):
+    """Convert features to tensors."""
+    for k in list(features.keys()):
+        v = features[k]
+        v = np.array(v, dtype=np.float32)
+        v = np.nan_to_num(v, nan=0.0)
+        v = torch.from_numpy(v)
+        features[k] = v
+    
+    # Filter out node types with zero nodes
+    features = {k: v for k, v in features.items() if k in num_nodes_dict}
+    return features
 
