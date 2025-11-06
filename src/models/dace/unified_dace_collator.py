@@ -43,6 +43,7 @@ def unified_dace_collator(
     
     for sample_idx, plan in batch:
         sample_idxs.append(sample_idx)
+        # plan_runtime is already in milliseconds, convert to seconds
         labels.append(plan.plan_runtime / 1000)
         
         # Extract sequence with masks (4つの値を返す)
@@ -61,12 +62,16 @@ def unified_dace_collator(
     
     # Stack to tensors
     seq_encodings = torch.stack(seq_encodings)
-    attention_masks = torch.stack(attention_masks)
+    # Attention masks: TransformerEncoder expects (seq_len, seq_len) for all batches
+    # Since all samples use the same pad_length, we can use the first mask for all
+    # Note: This assumes all masks are identical due to padding structure
+    # For per-sample masks, we would need to modify the model's forward pass
+    attention_mask = attention_masks[0] if attention_masks else None
     loss_masks = torch.stack(loss_masks)
     run_times_tensor = torch.stack(run_times_list)
     labels = torch.tensor(labels, dtype=torch.float32)
     
-    return seq_encodings, attention_masks, loss_masks, run_times_tensor, labels, sample_idxs
+    return seq_encodings, attention_mask, loss_masks, run_times_tensor, labels, sample_idxs
 
 
 def plan_to_sequence(
@@ -106,9 +111,9 @@ def plan_to_sequence(
         current_id = len(nodes)
         nodes.append(node)
         
-        # Get runtime
+        # Get runtime (act_time is in milliseconds, convert to seconds for consistency)
         runtime = getattr(node.plan_parameters, 'act_time', 0.0) if hasattr(node.plan_parameters, 'act_time') else 0.0
-        run_times.append(runtime / 1000 if runtime else 0.0)
+        run_times.append(runtime / 1000.0 if runtime else 0.0)
         
         # Add edge
         if parent_id is not None:
@@ -128,7 +133,7 @@ def plan_to_sequence(
     # Step 3: Encode each node
     flat_sequence = []
     
-    for node in nodes:
+    for i, node in enumerate(nodes):
         op_type = mapper.get_feature('operator_type', node.plan_parameters)
         est_cost = mapper.get_feature('estimated_cost', node.plan_parameters) or 0.0
         est_card = mapper.get_feature('estimated_cardinality', node.plan_parameters) or 1.0
@@ -275,7 +280,7 @@ def calculate_heights(adjacency_matrix: list, num_nodes: int) -> list:
 
 
 def normalize_feature(value, stats: dict) -> float:
-    """Normalize numeric feature."""
+    """Normalize numeric feature using scaler if available."""
     if value is None:
         return 0.0
     
@@ -284,6 +289,13 @@ def normalize_feature(value, stats: dict) -> float:
     except:
         return 0.0
     
+    # Use scaler if available (like original DACE)
+    if 'scaler' in stats:
+        import numpy as np
+        scaled = stats['scaler'].transform(np.array([[value]]))
+        return float(scaled[0, 0])
+    
+    # Fallback to manual scaling
     center = stats.get('center', 0.0)
     scale = stats.get('scale', 1.0)
     

@@ -74,7 +74,7 @@ def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans: int = None)
     return all_plans
 
 
-def create_feature_statistics(plans, featurization):
+def create_feature_statistics(plans, featurization, dbms_name: str):
     """Generate feature statistics from plans."""
     print("📊 Collecting feature statistics...")
     
@@ -88,6 +88,8 @@ def create_feature_statistics(plans, featurization):
         'estimated_cost': [],
         'estimated_width': [],
     }
+
+    mapper = FeatureMapper(dbms_name)
     
     def collect_from_node(node):
         if hasattr(node, 'plan_parameters'):
@@ -97,7 +99,6 @@ def create_feature_statistics(plans, featurization):
                 actual_op_names.add(op)
             
             # Collect numeric values
-            mapper = FeatureMapper('trino')
             for feat_name in numeric_feature_values.keys():
                 try:
                     value = mapper.get_feature(feat_name, params)
@@ -202,7 +203,7 @@ def run_training(
     
     # Feature statistics
     all_plans = train_plans + test_plans
-    feature_statistics = create_feature_statistics(all_plans, UnifiedQueryFormerFeaturization)
+    feature_statistics = create_feature_statistics(all_plans, UnifiedQueryFormerFeaturization, dbms_name=dbms_name)
     print(f"✓ Generated {len(feature_statistics)} feature types")
     print()
     

@@ -108,7 +108,7 @@ def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans_per_file: in
     return all_plans
 
 
-def create_feature_statistics_from_plans(plans, plan_featurization):
+def create_feature_statistics_from_plans(plans, plan_featurization, dbms_name: str):
     """
     Generate feature statistics from plans.
     
@@ -121,6 +121,10 @@ def create_feature_statistics_from_plans(plans, plan_featurization):
     """
     print("📊 Collecting feature statistics from plans...")
     
+    from core.features.mapper import FeatureMapper
+
+    mapper = FeatureMapper(dbms_name)
+
     # Collect actual operators used
     actual_op_names = set()
     filter_operators = set()
@@ -193,10 +197,6 @@ def create_feature_statistics_from_plans(plans, plan_featurization):
         """Collect actual values from plans."""
         if hasattr(node, 'plan_parameters'):
             params = node.plan_parameters
-            
-            # Use FeatureMapper to extract values
-            from core.features.mapper import FeatureMapper
-            mapper = FeatureMapper('trino')  # Will work for any DBMS
             
             for feat_name in numeric_feature_values.keys():
                 try:
@@ -577,7 +577,8 @@ def run_training(
     
     feature_statistics = create_feature_statistics_from_plans(
         all_plans_for_stats,
-        featurization
+        featurization,
+        dbms_name=dbms_name
     )
     
     print(f"✓ Generated feature statistics for {len(feature_statistics)} features")

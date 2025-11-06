@@ -89,7 +89,7 @@ def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans_per_file: in
     return all_plans
 
 
-def create_feature_statistics_from_plans(plans, plan_featurization):
+def create_feature_statistics_from_plans(plans, plan_featurization, dbms_name='trino'):
     """Generate feature statistics from plans."""
     print("📊 Collecting feature statistics...")
     
@@ -103,6 +103,9 @@ def create_feature_statistics_from_plans(plans, plan_featurization):
         'estimated_width': [],
     }
     
+    # Get the correct mapper for the DBMS
+    mapper = FeatureMapper(dbms_name)
+    
     def collect_from_node(node):
         if hasattr(node, 'plan_parameters'):
             params = node.plan_parameters
@@ -110,8 +113,7 @@ def create_feature_statistics_from_plans(plans, plan_featurization):
             if op_name:
                 actual_op_names.add(op_name)
             
-            # Collect numeric values
-            mapper = FeatureMapper('trino')
+            # Collect numeric values using the correct DBMS mapper
             for feat_name in numeric_feature_values.keys():
                 try:
                     value = mapper.get_feature(feat_name, params)
@@ -202,7 +204,7 @@ def run_training(
     print("🔧 Generating feature statistics")
     print("-"*80)
     all_plans = train_plans + test_plans
-    feature_statistics = create_feature_statistics_from_plans(all_plans, UnifiedDACEFeaturization)
+    feature_statistics = create_feature_statistics_from_plans(all_plans, UnifiedDACEFeaturization, dbms_name)
     print(f"✓ Generated {len(feature_statistics)} features")
     print()
     
@@ -275,7 +277,8 @@ def run_training(
     print("-"*80)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = torch.nn.MSELoss()
+    # Use the model's DaceLoss instead of MSELoss
+    criterion = model.loss_fxn
     
     best_val_loss = float('inf')
     
@@ -297,7 +300,9 @@ def run_training(
                 loss_masks = loss_masks.to(device)
             
             optimizer.zero_grad()
+            # Model forward sets loss_masks and real_run_times in the loss function
             predictions = model((seq_encodings, attention_masks, loss_masks, run_times))
+            # DaceLoss uses the predictions and real_run_times set by model.forward()
             loss = criterion(predictions, labels)
             loss.backward()
             optimizer.step()
@@ -323,7 +328,9 @@ def run_training(
                 if loss_masks is not None:
                     loss_masks = loss_masks.to(device)
                 
+                # Model forward sets loss_masks and real_run_times in the loss function
                 predictions = model((seq_encodings, attention_masks, loss_masks, run_times))
+                # DaceLoss uses the predictions and real_run_times set by model.forward()
                 loss = criterion(predictions, labels)
                 val_loss += loss.item()
                 

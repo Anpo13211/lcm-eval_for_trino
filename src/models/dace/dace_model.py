@@ -49,7 +49,19 @@ class DACELora(nn.Module):
         # change x shape to (batch, seq_len, input_size) from (batch, len)
         # one node is 18 bits
         x = x.view(x.shape[0], -1, self.node_length)
-        out = self.transformer_encoder(x, mask=attn_mask)
+
+        if attn_mask is not None:
+            if attn_mask.dim() == 3:
+                outputs = []
+                for seq, mask in zip(x, attn_mask):
+                    mask = mask.to(device=seq.device)
+                    outputs.append(self.transformer_encoder(seq.unsqueeze(0), mask=mask))
+                out = torch.cat(outputs, dim=0)
+            else:
+                attn_mask = attn_mask.to(device=x.device)
+                out = self.transformer_encoder(x, mask=attn_mask)
+        else:
+            out = self.transformer_encoder(x)
         out = self.mlp(out)
         out = self.sigmoid(out).squeeze(dim=2)
         return out

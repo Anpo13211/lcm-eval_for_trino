@@ -60,12 +60,36 @@ class DaceLoss(nn.Module):
         self.to(model.device)
 
     def forward(self, input, target):
-        input = self.preds
-        target = self.real_run_times
-        # print(self.preds.device, self.real_run_times.device)
-        loss = torch.max(input / target, target / input)
+        # NOTE: The loss is computed externally using the stored tensors from the
+        #       model forward pass.  The incoming ``input``/``target`` tensors are
+        #       ignored to keep parity with the previous behaviour.
+        del input, target
+
+        # ``self.loss_masks`` indicates which nodes should contribute to the loss.
+        # In the current DACE implementation this is usually only the root node.
+        mask = self.loss_masks > 0
+
+        # Guard against zeros which would otherwise yield divisions by zero and
+        # subsequently NaNs.  For masked-out entries we simply plug in ``1`` so
+        # that the final logarithm evaluates to ``log(1) = 0`` and has no effect.
+        eps = 1e-6
+        safe_preds = torch.where(
+            mask,
+            torch.clamp(self.preds, min=eps),
+            torch.ones_like(self.preds),
+        )
+        safe_targets = torch.where(
+            mask,
+            torch.clamp(self.real_run_times, min=eps),
+            torch.ones_like(self.real_run_times),
+        )
+
+        q_error = torch.max(safe_preds / safe_targets, safe_targets / safe_preds)
+        # Replace masked values with 1 (log(1) -> 0) before weighting.
+        q_error = torch.where(mask, q_error, torch.ones_like(q_error))
+
+        loss = torch.log(torch.where(q_error > 1, q_error, torch.ones_like(q_error)))
         loss = loss * self.loss_masks
-        loss = torch.log(torch.where(loss > 1, loss, 1))
         loss = torch.sum(loss, dim=1)
         loss = torch.mean(loss)
         return loss
