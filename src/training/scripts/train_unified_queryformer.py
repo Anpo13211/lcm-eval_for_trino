@@ -13,7 +13,14 @@ Usage:
 
 import sys
 import os
+import warnings
 from pathlib import Path
+
+# Suppress warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torchdata')
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # Add src to path
 script_dir = Path(__file__).resolve().parent
@@ -69,6 +76,12 @@ def load_table_samples(schema_name: str, no_samples: int = 1000):
     
     # Get CSV reading kwargs from schema
     csv_kwargs = vars(schema.csv_kwargs) if hasattr(schema, 'csv_kwargs') else {}
+    # Add parameters to suppress warnings
+    csv_kwargs.update({
+        'low_memory': False,
+        'on_bad_lines': 'skip',  # Suppress "Skipping line" warnings
+        'encoding_errors': 'ignore'
+    })
     
     for table_name in schema.tables:
         df = None
@@ -76,7 +89,10 @@ def load_table_samples(schema_name: str, no_samples: int = 1000):
             csv_path = Path(data_dir) / f'{table_name}.csv'
             if csv_path.exists():
                 try:
-                    df = pd.read_csv(csv_path, **csv_kwargs)
+                    # Suppress DtypeWarning during CSV reading
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        df = pd.read_csv(csv_path, **csv_kwargs)
                     if len(df) > no_samples:
                         df = df.sample(random_state=0, n=no_samples)
                     break
@@ -331,7 +347,9 @@ def run_training(
     # Load column statistics and augment sample_vec
     print("📊 Loading column statistics and augmenting sample_vec")
     try:
-        col_stats_path = Path('datasets_statistics') / f"iceberg_{schema_name}" / 'column_stats.json'
+        # Use absolute path from project root
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        col_stats_path = project_root / 'datasets_statistics' / f"iceberg_{schema_name}" / 'column_stats.json'
         from cross_db_benchmark.benchmark_tools.utils import load_json
         column_statistics = load_json(str(col_stats_path), namespace=False)
         
@@ -393,7 +411,8 @@ def run_training(
     
     config = QueryFormerModelConfig(
         hidden_dim_plan=hidden_dim,
-        device=device
+        device=device,
+        max_num_filters=12  # Increase to handle complex queries (default: 6)
     )
     
     # column_statistics already loaded above, just rebuild feature_statistics with it
@@ -453,7 +472,9 @@ def run_training(
     # Training
     print("🚀 Training")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    criterion = torch.nn.MSELoss()
+    
+    # Use model's internal loss function (QLoss by default, matching PostgreSQL version)
+    criterion = model.loss_fxn
     
     best_val_loss = float('inf')
     

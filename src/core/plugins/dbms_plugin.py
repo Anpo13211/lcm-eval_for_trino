@@ -38,8 +38,19 @@ class DBMSPlugin(ABC):
         - Parse raw EXPLAIN ANALYZE output
         - Generate AbstractPlanOperator tree structure
         
+        The parser should inherit from:
+            core.parsers.base.AbstractPlanParser (preferred)
+        or:
+            cross_db_benchmark.benchmark_tools.abstract.plan_parser.AbstractPlanParser (legacy)
+        
         Returns:
             AbstractPlanParser instance
+        
+        Example:
+            def get_parser(self):
+                from core.parsers.adapter import wrap_legacy_parser
+                from my_dbms.parser import MyDBMSParser
+                return wrap_legacy_parser(MyDBMSParser(), self.name)
         """
         pass
     
@@ -117,9 +128,14 @@ class DBMSPlugin(ABC):
 # Forward declarations for type hints
 # These will be properly imported from their respective modules
 try:
-    from cross_db_benchmark.benchmark_tools.abstract.plan_parser import AbstractPlanParser
+    # Try new unified parser first
+    from core.parsers.base import AbstractPlanParser
 except ImportError:
-    AbstractPlanParser = None
+    try:
+        # Fall back to legacy parser
+        from cross_db_benchmark.benchmark_tools.abstract.plan_parser import AbstractPlanParser
+    except ImportError:
+        AbstractPlanParser = None
 
 try:
     from core.statistics.converter import StatisticsConverter

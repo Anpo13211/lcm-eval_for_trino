@@ -1,0 +1,549 @@
+"""
+Unified DACE Training Script with Leave-One-Out Cross-Validation
+
+This script performs leave-one-out cross-validation across 20 datasets.
+For each iteration, it trains on 19 datasets and tests on 1 held-out dataset.
+
+Usage:
+    python -m training.scripts.train_unified_dace_loo \
+        --dbms trino \
+        --data_dir /Users/an/query_engine/explain_analyze_results \
+        --output_dir models/dace_loo
+"""
+
+import sys
+import os
+import warnings
+from pathlib import Path
+
+# Suppress warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torchdata')
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+# Environment setup
+for i in range(11):
+    env_key = f'NODE{i:02d}'
+    if os.environ.get(env_key) in (None, '', 'None'):
+        os.environ[env_key] = '[]'
+
+# Add src to path
+script_dir = Path(__file__).resolve().parent
+src_dir = script_dir.parent.parent
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
+
+import argparse
+import functools
+import torch
+import json
+from torch.utils.data import DataLoader, Dataset, random_split
+from tqdm import tqdm
+import numpy as np
+from datetime import datetime
+
+# Initialize plugin system
+import core.init_plugins
+
+from core.plugins.registry import DBMSRegistry
+from models.dace.unified_dace_collator import unified_dace_collator
+from training.unified_featurizations import UnifiedDACEFeaturization
+from models.dace.dace_model import DACELora
+from classes.classes import DACEModelConfig
+from training.training.metrics import QError, RMSE
+
+
+# Dataset names (in order)
+DATASET_NAMES = [
+    'accidents', 'airline', 'baseball', 'basketball', 'carcinogenesis',
+    'consumer', 'credit', 'employee', 'fhnk', 'financial',
+    'geneea', 'genome', 'hepatitis', 'imdb', 'movielens',
+    'seznam', 'ssb', 'tournament', 'tpc_h', 'walmart'
+]
+
+
+class UnifiedPlanDataset(Dataset):
+    """Universal plan dataset."""
+    
+    def __init__(self, plans):
+        self.plans = plans
+    
+    def __len__(self):
+        return len(self.plans)
+    
+    def __getitem__(self, idx):
+        return idx, self.plans[idx]
+
+
+def load_all_plans_once(data_dir: Path, dbms_name: str, max_plans_per_dataset: int = None):
+    """
+    Load all plans from all datasets once and cache them.
+    
+    Returns:
+        dict: {dataset_name: list_of_plans}
+    """
+    parser = DBMSRegistry.get_parser(dbms_name)
+    all_dataset_plans = {}
+    
+    print("📂 Loading all datasets (one-time operation)")
+    print("="*80)
+    
+    for dataset_name in DATASET_NAMES:
+        file_path = data_dir / f"{dataset_name}_complex_workload_200k_s1_explain_analyze.txt"
+        
+        if not file_path.exists():
+            print(f"⚠️  {dataset_name}: File not found, skipping")
+            continue
+        
+        print(f"  Loading {dataset_name}...")
+        
+        try:
+            parsed_plans, runtimes = parser.parse_explain_analyze_file(
+                str(file_path),
+                min_runtime=0,
+                max_runtime=float('inf')
+            )
+            
+            # Set plan_runtime and database_id
+            for plan, runtime in zip(parsed_plans, runtimes):
+                plan.plan_runtime = runtime
+                plan.database_id = 0
+                plan.dataset_name = dataset_name
+            
+            # Limit if needed
+            if max_plans_per_dataset and len(parsed_plans) > max_plans_per_dataset:
+                parsed_plans = parsed_plans[:max_plans_per_dataset]
+            
+            all_dataset_plans[dataset_name] = parsed_plans
+            print(f"    ✓ Loaded {len(parsed_plans)} plans from {dataset_name}")
+            
+        except Exception as e:
+            print(f"    ⚠️  Failed to load {dataset_name}: {e}")
+            continue
+    
+    print(f"\n✓ Total: {len(all_dataset_plans)} datasets loaded")
+    print("="*80)
+    print()
+    
+    return all_dataset_plans
+
+
+def create_feature_statistics_from_plans(plans, plan_featurization, dbms_name='trino'):
+    """Generate feature statistics from plans."""
+    from sklearn.preprocessing import RobustScaler
+    from core.features.mapper import FeatureMapper
+    
+    actual_op_names = set()
+    numeric_feature_values = {
+        'estimated_cardinality': [],
+        'estimated_cost': [],
+        'estimated_width': [],
+    }
+    
+    mapper = FeatureMapper(dbms_name)
+    
+    def collect_from_node(node):
+        if hasattr(node, 'plan_parameters'):
+            params = node.plan_parameters
+            op_name = params.get('op_name') if isinstance(params, dict) else getattr(params, 'op_name', None)
+            if op_name:
+                actual_op_names.add(op_name)
+            
+            # Collect numeric values
+            for feat_name in numeric_feature_values.keys():
+                try:
+                    value = mapper.get_feature(feat_name, params)
+                    if value is not None and not isinstance(value, str):
+                        numeric_feature_values[feat_name].append(float(value))
+                except:
+                    pass
+        
+        for child in node.children:
+            collect_from_node(child)
+    
+    for plan in plans:
+        collect_from_node(plan)
+    
+    # Build feature statistics
+    feature_statistics = {}
+    
+    # op_name (categorical)
+    feature_statistics['op_name'] = {
+        'type': 'categorical',
+        'value_dict': {op: i for i, op in enumerate(sorted(actual_op_names))},
+        'no_vals': len(actual_op_names)
+    }
+    
+    feature_statistics['operator_type'] = feature_statistics['op_name']
+    
+    # Numeric features
+    for feat_name, values in numeric_feature_values.items():
+        if len(values) > 0:
+            values_array = np.array(values, dtype=np.float32).reshape(-1, 1)
+            scaler = RobustScaler()
+            scaler.fit(values_array)
+            
+            feature_statistics[feat_name] = {
+                'type': 'numeric',
+                'max': float(values_array.max()),
+                'scale': float(scaler.scale_.item()),
+                'center': float(scaler.center_.item())
+            }
+        else:
+            feature_statistics[feat_name] = {
+                'type': 'numeric',
+                'max': 1.0,
+                'scale': 1.0,
+                'center': 0.0
+            }
+    
+    return feature_statistics
+
+
+def evaluate_test(model, test_loader, device, test_dataset_name):
+    """Evaluate model on test set with detailed metrics."""
+    model.eval()
+    all_predictions = []
+    all_labels = []
+    
+    with torch.no_grad():
+        for batch in test_loader:
+            try:
+                seq_encodings, attention_masks, loss_masks, run_times, labels, _ = batch
+                seq_encodings = seq_encodings.to(device)
+                run_times = run_times.to(device)
+                labels = labels.to(device)
+                
+                if attention_masks is not None:
+                    attention_masks = attention_masks.to(device)
+                if loss_masks is not None:
+                    loss_masks = loss_masks.to(device)
+                
+                predictions = model((seq_encodings, attention_masks, loss_masks, run_times))
+                
+                all_predictions.append(predictions.cpu().numpy())
+                all_labels.append(labels.cpu().numpy())
+                
+            except Exception:
+                continue
+    
+    if len(all_predictions) == 0:
+        return None
+    
+    all_predictions = np.concatenate(all_predictions).flatten()
+    all_labels = np.concatenate(all_labels).flatten()
+    
+    min_val = 0.1
+    safe_preds = np.clip(all_predictions, min_val, np.inf)
+    safe_labels = np.clip(all_labels, min_val, np.inf)
+    
+    # Calculate metrics
+    rmse = RMSE().evaluate_metric(labels=all_labels, preds=all_predictions)
+    median_q_error = QError(percentile=50, min_val=min_val).evaluate_metric(labels=safe_labels, preds=safe_preds)
+    mean_q_error = float(np.mean(np.maximum(safe_preds / safe_labels, safe_labels / safe_preds)))
+    p95_q_error = QError(percentile=95, min_val=min_val).evaluate_metric(labels=safe_labels, preds=safe_preds)
+    p99_q_error = QError(percentile=99, min_val=min_val).evaluate_metric(labels=safe_labels, preds=safe_preds)
+    max_q_error = QError(percentile=100, min_val=min_val).evaluate_metric(labels=safe_labels, preds=safe_preds)
+    
+    print(f"\n  📊 Test Results for {test_dataset_name}")
+    print(f"  {'─'*70}")
+    print(f"    Samples: {len(all_labels)}")
+    print(f"    RMSE: {rmse:.4f} sec")
+    print(f"    Median Q-Error: {median_q_error:.4f}")
+    print(f"    Mean Q-Error: {mean_q_error:.4f}")
+    print(f"    P95 Q-Error: {p95_q_error:.4f}")
+    print(f"    P99 Q-Error: {p99_q_error:.4f}")
+    print(f"    Max Q-Error: {max_q_error:.4f}")
+    
+    return {
+        'dataset': test_dataset_name,
+        'rmse': float(rmse) if rmse is not None else None,
+        'median_q_error': float(median_q_error) if median_q_error is not None else None,
+        'mean_q_error': float(mean_q_error) if mean_q_error is not None else None,
+        'p95_q_error': float(p95_q_error) if p95_q_error is not None else None,
+        'p99_q_error': float(p99_q_error) if p99_q_error is not None else None,
+        'max_q_error': float(max_q_error) if max_q_error is not None else None,
+        'num_samples': int(len(all_labels))
+    }
+
+
+def run_leave_one_out(
+    dbms_name: str,
+    data_dir: Path,
+    output_dir: Path,
+    epochs: int = 100,
+    batch_size: int = 32,
+    hidden_dim: int = 128,
+    node_length: int = 22,
+    learning_rate: float = 0.001,
+    device: str = "cuda:0",
+    max_plans_per_dataset: int = None
+):
+    """
+    Run leave-one-out cross-validation across all datasets.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print("="*80)
+    print(f"LEAVE-ONE-OUT CROSS-VALIDATION - DACE ({dbms_name.upper()})")
+    print("="*80)
+    print(f"Total Datasets: {len(DATASET_NAMES)}")
+    print(f"Device: {device}")
+    print(f"Epochs per fold: {epochs}")
+    print(f"Batch size: {batch_size}")
+    print("="*80)
+    print()
+    
+    # Step 1: Load all plans once
+    all_dataset_plans = load_all_plans_once(data_dir, dbms_name, max_plans_per_dataset)
+    
+    # Step 2: Generate feature statistics from ALL plans
+    print("🔧 Generating feature statistics from all plans")
+    print("="*80)
+    all_plans = []
+    for plans in all_dataset_plans.values():
+        all_plans.extend(plans)
+    
+    feature_statistics = create_feature_statistics_from_plans(all_plans, UnifiedDACEFeaturization, dbms_name)
+    print(f"✓ Generated feature statistics for {len(feature_statistics)} features")
+    print()
+    
+    # Step 3: Leave-one-out loop
+    all_results = []
+    
+    for fold_idx, test_dataset_name in enumerate(DATASET_NAMES):
+        if test_dataset_name not in all_dataset_plans:
+            print(f"⚠️  Fold {fold_idx+1}/{len(DATASET_NAMES)}: {test_dataset_name} not found, skipping")
+            continue
+        
+        print("\n" + "="*80)
+        print(f"FOLD {fold_idx+1}/{len(DATASET_NAMES)}: Test on {test_dataset_name}")
+        print("="*80)
+        
+        # Prepare train and test plans
+        train_plans = []
+        for dataset_name, plans in all_dataset_plans.items():
+            if dataset_name != test_dataset_name:
+                train_plans.extend(plans)
+        
+        test_plans = all_dataset_plans[test_dataset_name]
+        
+        print(f"  Train plans: {len(train_plans)} (from {len(all_dataset_plans)-1} datasets)")
+        print(f"  Test plans: {len(test_plans)} (from {test_dataset_name})")
+        
+        # Split train into train/val
+        train_size = int(0.85 * len(train_plans))
+        val_size = len(train_plans) - train_size
+        train_split, val_split = random_split(
+            train_plans,
+            [train_size, val_size],
+            generator=torch.Generator().manual_seed(42)
+        )
+        
+        # Create unified collator
+        collate_fn = functools.partial(
+            unified_dace_collator,
+            dbms_name=dbms_name,
+            feature_statistics=feature_statistics,
+            config=DACEModelConfig(
+                batch_size=batch_size,
+                hidden_dim=hidden_dim,
+                node_length=node_length
+            )
+        )
+        
+        train_loader = DataLoader(
+            UnifiedPlanDataset([train_plans[i] for i in train_split.indices]),
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collate_fn
+        )
+        
+        val_loader = DataLoader(
+            UnifiedPlanDataset([train_plans[i] for i in val_split.indices]),
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_fn
+        )
+        
+        test_loader = DataLoader(
+            UnifiedPlanDataset(test_plans),
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_fn
+        )
+        
+        print(f"  Train batches: {len(train_loader)}, Val: {len(val_loader)}, Test: {len(test_loader)}")
+        
+        # Create model
+        model_config = DACEModelConfig(
+            batch_size=batch_size,
+            hidden_dim=hidden_dim,
+            node_length=node_length,
+            featurization=UnifiedDACEFeaturization,
+            device=device
+        )
+        
+        model = DACELora(config=model_config)
+        model = model.to(device)
+        
+        # Training
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        criterion = model.loss_fxn
+        best_val_loss = float('inf')
+        
+        print(f"\n  🚀 Training...")
+        for epoch in range(epochs):
+            # Train
+            model.train()
+            total_loss = 0.0
+            for batch in train_loader:
+                seq_encodings, attention_masks, loss_masks, run_times, labels, _ = batch
+                
+                seq_encodings = seq_encodings.to(device)
+                run_times = run_times.to(device)
+                labels = labels.to(device)
+                
+                if attention_masks is not None:
+                    attention_masks = attention_masks.to(device)
+                if loss_masks is not None:
+                    loss_masks = loss_masks.to(device)
+                
+                optimizer.zero_grad()
+                predictions = model((seq_encodings, attention_masks, loss_masks, run_times))
+                loss = criterion(predictions, labels)
+                loss.backward()
+                optimizer.step()
+                
+                total_loss += loss.item()
+            
+            avg_train_loss = total_loss / len(train_loader)
+            
+            # Validate
+            model.eval()
+            val_loss = 0.0
+            
+            with torch.no_grad():
+                for batch in val_loader:
+                    seq_encodings, attention_masks, loss_masks, run_times, labels, _ = batch
+                    seq_encodings = seq_encodings.to(device)
+                    run_times = run_times.to(device)
+                    labels = labels.to(device)
+                    
+                    if attention_masks is not None:
+                        attention_masks = attention_masks.to(device)
+                    if loss_masks is not None:
+                        loss_masks = loss_masks.to(device)
+                    
+                    predictions = model((seq_encodings, attention_masks, loss_masks, run_times))
+                    loss = criterion(predictions, labels)
+                    val_loss += loss.item()
+            
+            avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0.0
+            
+            if epoch % 10 == 0 or epoch == epochs - 1:
+                print(f"    Epoch {epoch+1}/{epochs}: train={avg_train_loss:.4f}, val={avg_val_loss:.4f}")
+            
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+        
+        # Evaluate on test set
+        test_metrics = evaluate_test(model, test_loader, device, test_dataset_name)
+        
+        if test_metrics:
+            all_results.append(test_metrics)
+        
+        # Clean up model
+        del model
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    
+    # Save all results
+    results_file = output_dir / f"{dbms_name}_leave_one_out_results.json"
+    
+    # Calculate average metrics
+    if all_results:
+        avg_metrics = {
+            'avg_rmse': np.mean([r['rmse'] for r in all_results if r['rmse'] is not None]),
+            'avg_median_q_error': np.mean([r['median_q_error'] for r in all_results if r['median_q_error'] is not None]),
+            'avg_mean_q_error': np.mean([r['mean_q_error'] for r in all_results if r['mean_q_error'] is not None]),
+            'avg_p95_q_error': np.mean([r['p95_q_error'] for r in all_results if r['p95_q_error'] is not None]),
+            'avg_p99_q_error': np.mean([r['p99_q_error'] for r in all_results if r['p99_q_error'] is not None]),
+        }
+        
+        results_summary = {
+            'timestamp': datetime.now().isoformat(),
+            'dbms': dbms_name,
+            'num_folds': len(all_results),
+            'epochs_per_fold': epochs,
+            'batch_size': batch_size,
+            'hidden_dim': hidden_dim,
+            'node_length': node_length,
+            'learning_rate': learning_rate,
+            'average_metrics': avg_metrics,
+            'per_dataset_results': all_results
+        }
+        
+        with open(results_file, 'w') as f:
+            json.dump(results_summary, f, indent=2)
+        
+        print("\n" + "="*80)
+        print("📊 LEAVE-ONE-OUT CROSS-VALIDATION SUMMARY")
+        print("="*80)
+        print(f"Completed folds: {len(all_results)}/{len(DATASET_NAMES)}")
+        print(f"\nAverage Metrics:")
+        print(f"  RMSE: {avg_metrics['avg_rmse']:.4f}")
+        print(f"  Median Q-Error: {avg_metrics['avg_median_q_error']:.4f}")
+        print(f"  Mean Q-Error: {avg_metrics['avg_mean_q_error']:.4f}")
+        print(f"  P95 Q-Error: {avg_metrics['avg_p95_q_error']:.4f}")
+        print(f"  P99 Q-Error: {avg_metrics['avg_p99_q_error']:.4f}")
+        print(f"\n✓ Results saved to: {results_file}")
+        print("="*80)
+    
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Leave-One-Out Cross-Validation for DACE')
+    
+    parser.add_argument('--data_dir', type=str, required=True,
+                       help='Directory containing all dataset files')
+    parser.add_argument('--dbms', type=str, default='trino',
+                       choices=['trino', 'postgres', 'mysql'],
+                       help='DBMS name')
+    parser.add_argument('--output_dir', type=str, default='models/dace_loo',
+                       help='Output directory')
+    parser.add_argument('--epochs', type=int, default=100,
+                       help='Number of epochs per fold')
+    parser.add_argument('--batch_size', type=int, default=32,
+                       help='Batch size')
+    parser.add_argument('--hidden_dim', type=int, default=128,
+                       help='Hidden dimension')
+    parser.add_argument('--node_length', type=int, default=22,
+                       help='Node length')
+    parser.add_argument('--lr', type=float, default=0.001,
+                       help='Learning rate')
+    parser.add_argument('--device', type=str, default='cpu',
+                       help='Device (cuda:0, cpu, etc.)')
+    parser.add_argument('--max_plans', type=int, default=None,
+                       help='Maximum plans per dataset')
+    
+    args = parser.parse_args()
+    
+    return run_leave_one_out(
+        dbms_name=args.dbms,
+        data_dir=Path(args.data_dir),
+        output_dir=Path(args.output_dir),
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        hidden_dim=args.hidden_dim,
+        node_length=args.node_length,
+        learning_rate=args.lr,
+        device=args.device,
+        max_plans_per_dataset=args.max_plans
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
