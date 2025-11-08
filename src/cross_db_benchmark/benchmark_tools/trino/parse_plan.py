@@ -825,8 +825,6 @@ def integrate_all_fragments(root_operator, all_fragment_operators):
         if fragment_id:
             fragment_ids.add(fragment_id)
     
-    print(f"🔍 検出されたFragment: {sorted(fragment_ids)}")
-    
     # Fragment ごとに演算子をグループ化
     fragment_operators = {}
     for operator in all_fragment_operators:

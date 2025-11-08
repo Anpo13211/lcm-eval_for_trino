@@ -378,11 +378,11 @@ def main():
     parser.add_argument('--output_dir', type=str, default='models/unified_dace')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--hidden_dim', type=int, default=128)
+    parser.add_argument('--hidden_dim', type=int, default=256)
     parser.add_argument('--node_length', type=int, default=22)
     parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--device', type=str, default='cuda:0')
-    parser.add_argument('--max_plans', type=int, default=None)
+    parser.add_argument('--device', type=str, default='cpu')
+    parser.add_argument('--max_plans', type=int, default=10000)
     
     args = parser.parse_args()
     

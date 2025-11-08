@@ -134,7 +134,7 @@ def main():
     parser.add_argument('--schema', type=str, required=True)
     parser.add_argument('--dbms', type=str, default='trino')
     parser.add_argument('--output_dir', type=str, default='models/unified_flat')
-    parser.add_argument('--max_plans', type=int, default=None)
+    parser.add_argument('--max_plans', type=int, default=10000)
     
     args = parser.parse_args()
     

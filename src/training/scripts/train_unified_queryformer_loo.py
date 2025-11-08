@@ -182,13 +182,14 @@ def load_all_plans_once(data_dir: Path, dbms_name: str, max_plans_per_dataset: i
                 parsed_plans = parsed_plans[:max_plans_per_dataset]
             
             all_dataset_plans[dataset_name] = parsed_plans
-            print(f"    ✓ Loaded {len(parsed_plans)} plans from {dataset_name}")
             
         except Exception as e:
             print(f"    ⚠️  Failed to load {dataset_name}: {e}")
             continue
     
-    print(f"\n✓ Total: {len(all_dataset_plans)} datasets loaded")
+    # Calculate total plans
+    total_plans = sum(len(plans) for plans in all_dataset_plans.values())
+    print(f"✓ Loaded {total_plans} plans from {len(all_dataset_plans)} datasets")
     print("="*80)
     print()
     
@@ -771,7 +772,7 @@ def main():
                        help='Learning rate')
     parser.add_argument('--device', type=str, default='cpu',
                        help='Device (cuda:0, cpu, etc.)')
-    parser.add_argument('--max_plans', type=int, default=None,
+    parser.add_argument('--max_plans', type=int, default=10000,
                        help='Maximum plans per dataset')
     parser.add_argument('--statistics_dir', type=str, default='datasets_statistics',
                        help='Statistics directory')

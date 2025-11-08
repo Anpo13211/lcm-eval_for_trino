@@ -9,9 +9,6 @@ trino_table_stats.json
 trino_statistics.json
 accidents_valid_verbose.txt
 
-# Database statistics
-datasets_statistics/
-
 # Data files
 data/
 

@@ -67,7 +67,7 @@ class UnifiedPlanDataset(Dataset):
         return idx, self.plans[idx]
 
 
-def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans_per_file: int = None):
+def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans_per_file: int = 10000):
     """
     Load plans from EXPLAIN ANALYZE txt files.
     
@@ -774,13 +774,13 @@ def main():
                        help='Number of epochs')
     parser.add_argument('--batch_size', type=int, default=32,
                        help='Batch size')
-    parser.add_argument('--hidden_dim', type=int, default=128,
+    parser.add_argument('--hidden_dim', type=int, default=256,
                        help='Hidden dimension')
     parser.add_argument('--lr', type=float, default=0.001,
                        help='Learning rate')
-    parser.add_argument('--device', type=str, default='cuda:0',
+    parser.add_argument('--device', type=str, default='cpu',
                        help='Device (cuda:0, cpu, etc.)')
-    parser.add_argument('--max_plans', type=int, default=None,
+    parser.add_argument('--max_plans', type=int, default=10000,
                        help='Maximum plans per file')
     parser.add_argument('--statistics_dir', type=str, default='datasets_statistics',
                        help='Statistics directory')
