@@ -1,0 +1,23 @@
+{
+  "expenditures": {
+    "reltuples": 12123804.0,
+    "relpages": 147995,
+    "table_name": "expenditures",
+    "row_count": 12123804.0,
+    "num_columns": 7
+  },
+  "household_members": {
+    "reltuples": 824130.0,
+    "relpages": 10060,
+    "table_name": "household_members",
+    "row_count": 824130.0,
+    "num_columns": 5
+  },
+  "households": {
+    "reltuples": 340872.0,
+    "relpages": 4161,
+    "table_name": "households",
+    "row_count": 340872.0,
+    "num_columns": 9
+  }
+}

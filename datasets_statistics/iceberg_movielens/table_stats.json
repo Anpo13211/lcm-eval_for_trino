@@ -1,0 +1,51 @@
+{
+  "actors": {
+    "reltuples": 789520.0,
+    "relpages": 9637,
+    "table_name": "actors",
+    "row_count": 789520.0,
+    "num_columns": 2
+  },
+  "directors": {
+    "reltuples": 17608.0,
+    "relpages": 214,
+    "table_name": "directors",
+    "row_count": 17608.0,
+    "num_columns": 2
+  },
+  "movies": {
+    "reltuples": 30656.0,
+    "relpages": 374,
+    "table_name": "movies",
+    "row_count": 30656.0,
+    "num_columns": 4
+  },
+  "movies2actors": {
+    "reltuples": 1106792.0,
+    "relpages": 13510,
+    "table_name": "movies2actors",
+    "row_count": 1106792.0,
+    "num_columns": 2
+  },
+  "movies2directors": {
+    "reltuples": 33128.0,
+    "relpages": 404,
+    "table_name": "movies2directors",
+    "row_count": 33128.0,
+    "num_columns": 2
+  },
+  "u2base": {
+    "reltuples": 7969272.0,
+    "relpages": 97281,
+    "table_name": "u2base",
+    "row_count": 7969272.0,
+    "num_columns": 2
+  },
+  "users": {
+    "reltuples": 48312.0,
+    "relpages": 589,
+    "table_name": "users",
+    "row_count": 48312.0,
+    "num_columns": 3
+  }
+}

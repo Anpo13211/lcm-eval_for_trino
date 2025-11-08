@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "seznam",
+  "num_tables": 4,
+  "num_columns": 10
+}

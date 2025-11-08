@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "movielens",
+  "num_tables": 7,
+  "num_columns": 17
+}

@@ -1,0 +1,30 @@
+{
+  "client": {
+    "reltuples": 73447.0,
+    "relpages": 896,
+    "table_name": "client",
+    "row_count": 73447.0,
+    "num_columns": 2
+  },
+  "dobito": {
+    "reltuples": 554346.0,
+    "relpages": 6766,
+    "table_name": "dobito",
+    "row_count": 554346.0,
+    "num_columns": 3
+  },
+  "probehnuto": {
+    "reltuples": 1462078.0,
+    "relpages": 17847,
+    "table_name": "probehnuto",
+    "row_count": 1462078.0,
+    "num_columns": 3
+  },
+  "probehnuto_mimo_penezenku": {
+    "reltuples": 599386.0,
+    "relpages": 7316,
+    "table_name": "probehnuto_mimo_penezenku",
+    "row_count": 599386.0,
+    "num_columns": 2
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "regular_season_compact_results": {
+    "reltuples": 134566.0,
+    "relpages": 1642,
+    "table_name": "regular_season_compact_results",
+    "row_count": 134566.0,
+    "num_columns": 7
+  },
+  "regular_season_detailed_results": {
+    "reltuples": 60518.0,
+    "relpages": 738,
+    "table_name": "regular_season_detailed_results",
+    "row_count": 60518.0,
+    "num_columns": 33
+  },
+  "seasons": {
+    "reltuples": 31.0,
+    "relpages": 1,
+    "table_name": "seasons",
+    "row_count": 31.0,
+    "num_columns": 5
+  },
+  "target": {
+    "reltuples": 268.0,
+    "relpages": 3,
+    "table_name": "target",
+    "row_count": 268.0,
+    "num_columns": 6
+  },
+  "teams": {
+    "reltuples": 364.0,
+    "relpages": 4,
+    "table_name": "teams",
+    "row_count": 364.0,
+    "num_columns": 1
+  },
+  "tourney_compact_results": {
+    "reltuples": 1916.0,
+    "relpages": 23,
+    "table_name": "tourney_compact_results",
+    "row_count": 1916.0,
+    "num_columns": 7
+  },
+  "tourney_detailed_results": {
+    "reltuples": 780.0,
+    "relpages": 9,
+    "table_name": "tourney_detailed_results",
+    "row_count": 780.0,
+    "num_columns": 33
+  },
+  "tourney_seeds": {
+    "reltuples": 1946.0,
+    "relpages": 23,
+    "table_name": "tourney_seeds",
+    "row_count": 1946.0,
+    "num_columns": 2
+  },
+  "tourney_slots": {
+    "reltuples": 1916.0,
+    "relpages": 23,
+    "table_name": "tourney_slots",
+    "row_count": 1916.0,
+    "num_columns": 3
+  }
+}

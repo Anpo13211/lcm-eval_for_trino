@@ -1,0 +1,51 @@
+{
+  "bio": {
+    "reltuples": 64000.0,
+    "relpages": 781,
+    "table_name": "bio",
+    "row_count": 64000.0,
+    "num_columns": 2
+  },
+  "dispat": {
+    "reltuples": 1000000.0,
+    "relpages": 12207,
+    "table_name": "dispat",
+    "row_count": 1000000.0,
+    "num_columns": 3
+  },
+  "indis": {
+    "reltuples": 11382000.0,
+    "relpages": 138940,
+    "table_name": "indis",
+    "row_count": 11382000.0,
+    "num_columns": 10
+  },
+  "inf": {
+    "reltuples": 392000.0,
+    "relpages": 4785,
+    "table_name": "inf",
+    "row_count": 392000.0,
+    "num_columns": 1
+  },
+  "rel11": {
+    "reltuples": 1242000.0,
+    "relpages": 15161,
+    "table_name": "rel11",
+    "row_count": 1242000.0,
+    "num_columns": 1
+  },
+  "rel12": {
+    "reltuples": 11382000.0,
+    "relpages": 138940,
+    "table_name": "rel12",
+    "row_count": 11382000.0,
+    "num_columns": 1
+  },
+  "rel13": {
+    "reltuples": 392000.0,
+    "relpages": 4785,
+    "table_name": "rel13",
+    "row_count": 392000.0,
+    "num_columns": 1
+  }
+}

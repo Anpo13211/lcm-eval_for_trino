@@ -1,0 +1,23 @@
+{
+  "key": {
+    "reltuples": 45.0,
+    "relpages": 1,
+    "table_name": "key",
+    "row_count": 45.0,
+    "num_columns": 1
+  },
+  "station": {
+    "reltuples": 20.0,
+    "relpages": 1,
+    "table_name": "station",
+    "row_count": 20.0,
+    "num_columns": 0
+  },
+  "train": {
+    "reltuples": 4617600.0,
+    "relpages": 56367,
+    "table_name": "train",
+    "row_count": 4617600.0,
+    "num_columns": 3
+  }
+}

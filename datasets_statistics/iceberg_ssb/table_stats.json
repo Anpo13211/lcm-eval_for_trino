@@ -1,0 +1,37 @@
+{
+  "customer": {
+    "reltuples": 60000.0,
+    "relpages": 732,
+    "table_name": "customer",
+    "row_count": 60000.0,
+    "num_columns": 7
+  },
+  "dim_date": {
+    "reltuples": 2556.0,
+    "relpages": 31,
+    "table_name": "dim_date",
+    "row_count": 2556.0,
+    "num_columns": 16
+  },
+  "lineorder": {
+    "reltuples": 11997996.0,
+    "relpages": 146459,
+    "table_name": "lineorder",
+    "row_count": 11997996.0,
+    "num_columns": 16
+  },
+  "part": {
+    "reltuples": 400000.0,
+    "relpages": 4882,
+    "table_name": "part",
+    "row_count": 400000.0,
+    "num_columns": 8
+  },
+  "supplier": {
+    "reltuples": 4000.0,
+    "relpages": 48,
+    "table_name": "supplier",
+    "row_count": 4000.0,
+    "num_columns": 6
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "tpc_h",
+  "num_tables": 8,
+  "num_columns": 53
+}

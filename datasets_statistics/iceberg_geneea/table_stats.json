@@ -1,0 +1,135 @@
+{
+  "bod_schuze": {
+    "reltuples": 852932.0,
+    "relpages": 10411,
+    "table_name": "bod_schuze",
+    "row_count": 852932.0,
+    "num_columns": 14
+  },
+  "bod_stav": {
+    "reltuples": 161.0,
+    "relpages": 1,
+    "table_name": "bod_stav",
+    "row_count": 161.0,
+    "num_columns": 1
+  },
+  "funkce": {
+    "reltuples": 46874.0,
+    "relpages": 572,
+    "table_name": "funkce",
+    "row_count": 46874.0,
+    "num_columns": 4
+  },
+  "hl_check": {
+    "reltuples": 2116.0,
+    "relpages": 25,
+    "table_name": "hl_check",
+    "row_count": 2116.0,
+    "num_columns": 4
+  },
+  "hl_hlasovani": {
+    "reltuples": 81029.0,
+    "relpages": 989,
+    "table_name": "hl_hlasovani",
+    "row_count": 81029.0,
+    "num_columns": 16
+  },
+  "hl_poslanec": {
+    "reltuples": 16205800.0,
+    "relpages": 197824,
+    "table_name": "hl_poslanec",
+    "row_count": 16205800.0,
+    "num_columns": 2
+  },
+  "hl_vazby": {
+    "reltuples": 78959.0,
+    "relpages": 963,
+    "table_name": "hl_vazby",
+    "row_count": 78959.0,
+    "num_columns": 2
+  },
+  "hl_zposlanec": {
+    "reltuples": 2185.0,
+    "relpages": 26,
+    "table_name": "hl_zposlanec",
+    "row_count": 2185.0,
+    "num_columns": 2
+  },
+  "omluvy": {
+    "reltuples": 323380.0,
+    "relpages": 3947,
+    "table_name": "omluvy",
+    "row_count": 323380.0,
+    "num_columns": 4
+  },
+  "organy": {
+    "reltuples": 27186.0,
+    "relpages": 331,
+    "table_name": "organy",
+    "row_count": 27186.0,
+    "num_columns": 9
+  },
+  "osoby": {
+    "reltuples": 145406.0,
+    "relpages": 1774,
+    "table_name": "osoby",
+    "row_count": 145406.0,
+    "num_columns": 8
+  },
+  "pkgps": {
+    "reltuples": 4508.0,
+    "relpages": 55,
+    "table_name": "pkgps",
+    "row_count": 4508.0,
+    "num_columns": 3
+  },
+  "poslanec": {
+    "reltuples": 34799.0,
+    "relpages": 424,
+    "table_name": "poslanec",
+    "row_count": 34799.0,
+    "num_columns": 14
+  },
+  "schuze": {
+    "reltuples": 8050.0,
+    "relpages": 98,
+    "table_name": "schuze",
+    "row_count": 8050.0,
+    "num_columns": 5
+  },
+  "schuze_stav": {
+    "reltuples": 2415.0,
+    "relpages": 29,
+    "table_name": "schuze_stav",
+    "row_count": 2415.0,
+    "num_columns": 5
+  },
+  "typ_funkce": {
+    "reltuples": 2829.0,
+    "relpages": 34,
+    "table_name": "typ_funkce",
+    "row_count": 2829.0,
+    "num_columns": 5
+  },
+  "typ_organu": {
+    "reltuples": 1518.0,
+    "relpages": 18,
+    "table_name": "typ_organu",
+    "row_count": 1518.0,
+    "num_columns": 5
+  },
+  "zarazeni": {
+    "reltuples": 667069.0,
+    "relpages": 8142,
+    "table_name": "zarazeni",
+    "row_count": 667069.0,
+    "num_columns": 6
+  },
+  "zmatecne": {
+    "reltuples": 2507.0,
+    "relpages": 30,
+    "table_name": "zmatecne",
+    "row_count": 2507.0,
+    "num_columns": 0
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "basketball",
+  "num_tables": 9,
+  "num_columns": 186
+}

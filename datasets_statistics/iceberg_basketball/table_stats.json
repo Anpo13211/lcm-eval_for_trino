@@ -1,0 +1,65 @@
+{
+  "awards_coaches": {
+    "reltuples": 12200.0,
+    "relpages": 148,
+    "table_name": "awards_coaches",
+    "row_count": 12200.0,
+    "num_columns": 5
+  },
+  "awards_players": {
+    "reltuples": 343800.0,
+    "relpages": 4196,
+    "table_name": "awards_players",
+    "row_count": 343800.0,
+    "num_columns": 5
+  },
+  "coaches": {
+    "reltuples": 337800.0,
+    "relpages": 4123,
+    "table_name": "coaches",
+    "row_count": 337800.0,
+    "num_columns": 8
+  },
+  "draft": {
+    "reltuples": 1724200.0,
+    "relpages": 21047,
+    "table_name": "draft",
+    "row_count": 1724200.0,
+    "num_columns": 11
+  },
+  "player_allstar": {
+    "reltuples": 321600.0,
+    "relpages": 3925,
+    "table_name": "player_allstar",
+    "row_count": 321600.0,
+    "num_columns": 22
+  },
+  "players": {
+    "reltuples": 1012400.0,
+    "relpages": 12358,
+    "table_name": "players",
+    "row_count": 1012400.0,
+    "num_columns": 25
+  },
+  "players_teams": {
+    "reltuples": 4750200.0,
+    "relpages": 57985,
+    "table_name": "players_teams",
+    "row_count": 4750200.0,
+    "num_columns": 42
+  },
+  "series_post": {
+    "reltuples": 155000.0,
+    "relpages": 1892,
+    "table_name": "series_post",
+    "row_count": 155000.0,
+    "num_columns": 9
+  },
+  "teams": {
+    "reltuples": 307200.0,
+    "relpages": 3750,
+    "table_name": "teams",
+    "row_count": 307200.0,
+    "num_columns": 59
+  }
+}

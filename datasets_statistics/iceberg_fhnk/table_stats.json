@@ -1,0 +1,23 @@
+{
+  "pripady": {
+    "reltuples": 83038.0,
+    "relpages": 1013,
+    "table_name": "pripady",
+    "row_count": 83038.0,
+    "num_columns": 11
+  },
+  "vykony": {
+    "reltuples": 3758674.0,
+    "relpages": 45882,
+    "table_name": "vykony",
+    "row_count": 3758674.0,
+    "num_columns": 5
+  },
+  "zup": {
+    "reltuples": 384838.0,
+    "relpages": 4697,
+    "table_name": "zup",
+    "row_count": 384838.0,
+    "num_columns": 5
+  }
+}

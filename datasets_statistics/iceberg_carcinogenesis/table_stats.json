@@ -1,0 +1,44 @@
+{
+  "atom": {
+    "reltuples": 6109136.0,
+    "relpages": 74574,
+    "table_name": "atom",
+    "row_count": 6109136.0,
+    "num_columns": 4
+  },
+  "canc": {
+    "reltuples": 221746.0,
+    "relpages": 2706,
+    "table_name": "canc",
+    "row_count": 221746.0,
+    "num_columns": 1
+  },
+  "sbond_1": {
+    "reltuples": 9140788.0,
+    "relpages": 111581,
+    "table_name": "sbond_1",
+    "row_count": 9140788.0,
+    "num_columns": 3
+  },
+  "sbond_2": {
+    "reltuples": 624124.0,
+    "relpages": 7618,
+    "table_name": "sbond_2",
+    "row_count": 624124.0,
+    "num_columns": 3
+  },
+  "sbond_3": {
+    "reltuples": 8088.0,
+    "relpages": 98,
+    "table_name": "sbond_3",
+    "row_count": 8088.0,
+    "num_columns": 3
+  },
+  "sbond_7": {
+    "reltuples": 2786316.0,
+    "relpages": 34012,
+    "table_name": "sbond_7",
+    "row_count": 2786316.0,
+    "num_columns": 3
+  }
+}

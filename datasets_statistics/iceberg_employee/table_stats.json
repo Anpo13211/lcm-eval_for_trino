@@ -1,0 +1,44 @@
+{
+  "departments": {
+    "reltuples": 27.0,
+    "relpages": 1,
+    "table_name": "departments",
+    "row_count": 27.0,
+    "num_columns": 1
+  },
+  "dept_emp": {
+    "reltuples": 994809.0,
+    "relpages": 12143,
+    "table_name": "dept_emp",
+    "row_count": 994809.0,
+    "num_columns": 3
+  },
+  "dept_manager": {
+    "reltuples": 72.0,
+    "relpages": 1,
+    "table_name": "dept_manager",
+    "row_count": 72.0,
+    "num_columns": 3
+  },
+  "employees": {
+    "reltuples": 900072.0,
+    "relpages": 10987,
+    "table_name": "employees",
+    "row_count": 900072.0,
+    "num_columns": 5
+  },
+  "salaries": {
+    "reltuples": 8532141.0,
+    "relpages": 104152,
+    "table_name": "salaries",
+    "row_count": 8532141.0,
+    "num_columns": 3
+  },
+  "titles": {
+    "reltuples": 1329924.0,
+    "relpages": 16234,
+    "table_name": "titles",
+    "row_count": 1329924.0,
+    "num_columns": 3
+  }
+}

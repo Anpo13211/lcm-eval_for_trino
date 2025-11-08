@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "imdb",
+  "num_tables": 21,
+  "num_columns": 87
+}

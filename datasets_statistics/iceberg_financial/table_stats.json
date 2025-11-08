@@ -1,0 +1,58 @@
+{
+  "account": {
+    "reltuples": 18000.0,
+    "relpages": 219,
+    "table_name": "account",
+    "row_count": 18000.0,
+    "num_columns": 3
+  },
+  "card": {
+    "reltuples": 3568.0,
+    "relpages": 43,
+    "table_name": "card",
+    "row_count": 3568.0,
+    "num_columns": 3
+  },
+  "client": {
+    "reltuples": 21476.0,
+    "relpages": 262,
+    "table_name": "client",
+    "row_count": 21476.0,
+    "num_columns": 3
+  },
+  "disp": {
+    "reltuples": 21476.0,
+    "relpages": 262,
+    "table_name": "disp",
+    "row_count": 21476.0,
+    "num_columns": 3
+  },
+  "district": {
+    "reltuples": 308.0,
+    "relpages": 3,
+    "table_name": "district",
+    "row_count": 308.0,
+    "num_columns": 15
+  },
+  "loan": {
+    "reltuples": 2728.0,
+    "relpages": 33,
+    "table_name": "loan",
+    "row_count": 2728.0,
+    "num_columns": 6
+  },
+  "order": {
+    "reltuples": 25884.0,
+    "relpages": 315,
+    "table_name": "order",
+    "row_count": 25884.0,
+    "num_columns": 5
+  },
+  "trans": {
+    "reltuples": 4225280.0,
+    "relpages": 51578,
+    "table_name": "trans",
+    "row_count": 4225280.0,
+    "num_columns": 9
+  }
+}

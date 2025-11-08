@@ -1,0 +1,44 @@
+{
+  "att_classes": {
+    "reltuples": 4194.0,
+    "relpages": 51,
+    "table_name": "att_classes",
+    "row_count": 4194.0,
+    "num_columns": 1
+  },
+  "img_obj": {
+    "reltuples": 10503702.0,
+    "relpages": 128219,
+    "table_name": "img_obj",
+    "row_count": 10503702.0,
+    "num_columns": 6
+  },
+  "img_obj_att": {
+    "reltuples": 6448056.0,
+    "relpages": 78711,
+    "table_name": "img_obj_att",
+    "row_count": 6448056.0,
+    "num_columns": 2
+  },
+  "img_rel": {
+    "reltuples": 4578954.0,
+    "relpages": 55895,
+    "table_name": "img_rel",
+    "row_count": 4578954.0,
+    "num_columns": 3
+  },
+  "obj_classes": {
+    "reltuples": 1800.0,
+    "relpages": 21,
+    "table_name": "obj_classes",
+    "row_count": 1800.0,
+    "num_columns": 1
+  },
+  "pred_classes": {
+    "reltuples": 900.0,
+    "relpages": 10,
+    "table_name": "pred_classes",
+    "row_count": 900.0,
+    "num_columns": 1
+  }
+}

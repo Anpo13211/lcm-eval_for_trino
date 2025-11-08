@@ -1,0 +1,23 @@
+{
+  "nesreca": {
+    "reltuples": 508993.0,
+    "relpages": 6213,
+    "table_name": "nesreca",
+    "row_count": 508993.0,
+    "num_columns": 21
+  },
+  "oseba": {
+    "reltuples": 954036.0,
+    "relpages": 11645,
+    "table_name": "oseba",
+    "row_count": 954036.0,
+    "num_columns": 16
+  },
+  "upravna_enota": {
+    "reltuples": 64.0,
+    "relpages": 1,
+    "table_name": "upravna_enota",
+    "row_count": 64.0,
+    "num_columns": 3
+  }
+}

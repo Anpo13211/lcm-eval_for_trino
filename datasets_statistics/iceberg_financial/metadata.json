@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "financial",
+  "num_tables": 8,
+  "num_columns": 47
+}

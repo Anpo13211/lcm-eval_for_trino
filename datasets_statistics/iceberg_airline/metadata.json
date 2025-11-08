@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "airline",
+  "num_tables": 20,
+  "num_columns": 182
+}

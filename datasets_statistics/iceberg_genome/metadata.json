@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "genome",
+  "num_tables": 6,
+  "num_columns": 14
+}

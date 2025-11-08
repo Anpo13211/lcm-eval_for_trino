@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "geneea",
+  "num_tables": 19,
+  "num_columns": 109
+}

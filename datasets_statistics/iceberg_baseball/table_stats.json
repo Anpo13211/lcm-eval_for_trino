@@ -1,0 +1,177 @@
+{
+  "allstarfull": {
+    "reltuples": 48310.0,
+    "relpages": 589,
+    "table_name": "allstarfull",
+    "row_count": 48310.0,
+    "num_columns": 7
+  },
+  "appearances": {
+    "reltuples": 923060.0,
+    "relpages": 11267,
+    "table_name": "appearances",
+    "row_count": 923060.0,
+    "num_columns": 19
+  },
+  "awardsmanagers": {
+    "reltuples": 1560.0,
+    "relpages": 19,
+    "table_name": "awardsmanagers",
+    "row_count": 1560.0,
+    "num_columns": 5
+  },
+  "awardsplayers": {
+    "reltuples": 57950.0,
+    "relpages": 707,
+    "table_name": "awardsplayers",
+    "row_count": 57950.0,
+    "num_columns": 5
+  },
+  "awardssharemanagers": {
+    "reltuples": 3720.0,
+    "relpages": 45,
+    "table_name": "awardssharemanagers",
+    "row_count": 3720.0,
+    "num_columns": 6
+  },
+  "awardsshareplayers": {
+    "reltuples": 62890.0,
+    "relpages": 767,
+    "table_name": "awardsshareplayers",
+    "row_count": 62890.0,
+    "num_columns": 6
+  },
+  "batting": {
+    "reltuples": 923530.0,
+    "relpages": 11273,
+    "table_name": "batting",
+    "row_count": 923530.0,
+    "num_columns": 23
+  },
+  "battingpost": {
+    "reltuples": 97980.0,
+    "relpages": 1196,
+    "table_name": "battingpost",
+    "row_count": 97980.0,
+    "num_columns": 21
+  },
+  "els_teamnames": {
+    "reltuples": 3140.0,
+    "relpages": 38,
+    "table_name": "els_teamnames",
+    "row_count": 3140.0,
+    "num_columns": 5
+  },
+  "fielding": {
+    "reltuples": 1379750.0,
+    "relpages": 16842,
+    "table_name": "fielding",
+    "row_count": 1379750.0,
+    "num_columns": 17
+  },
+  "fieldingof": {
+    "reltuples": 120270.0,
+    "relpages": 1468,
+    "table_name": "fieldingof",
+    "row_count": 120270.0,
+    "num_columns": 5
+  },
+  "fieldingpost": {
+    "reltuples": 103460.0,
+    "relpages": 1262,
+    "table_name": "fieldingpost",
+    "row_count": 103460.0,
+    "num_columns": 16
+  },
+  "halloffame": {
+    "reltuples": 38830.0,
+    "relpages": 473,
+    "table_name": "halloffame",
+    "row_count": 38830.0,
+    "num_columns": 7
+  },
+  "managers": {
+    "reltuples": 32920.0,
+    "relpages": 401,
+    "table_name": "managers",
+    "row_count": 32920.0,
+    "num_columns": 9
+  },
+  "managershalf": {
+    "reltuples": 890.0,
+    "relpages": 10,
+    "table_name": "managershalf",
+    "row_count": 890.0,
+    "num_columns": 9
+  },
+  "pitching": {
+    "reltuples": 393610.0,
+    "relpages": 4804,
+    "table_name": "pitching",
+    "row_count": 393610.0,
+    "num_columns": 29
+  },
+  "pitchingpost": {
+    "reltuples": 41970.0,
+    "relpages": 512,
+    "table_name": "pitchingpost",
+    "row_count": 41970.0,
+    "num_columns": 29
+  },
+  "players": {
+    "reltuples": 164070.0,
+    "relpages": 2002,
+    "table_name": "players",
+    "row_count": 164070.0,
+    "num_columns": 32
+  },
+  "salaries": {
+    "reltuples": 231110.0,
+    "relpages": 2821,
+    "table_name": "salaries",
+    "row_count": 231110.0,
+    "num_columns": 4
+  },
+  "schools": {
+    "reltuples": 7490.0,
+    "relpages": 91,
+    "table_name": "schools",
+    "row_count": 7490.0,
+    "num_columns": 4
+  },
+  "schoolsplayers": {
+    "reltuples": 56790.0,
+    "relpages": 693,
+    "table_name": "schoolsplayers",
+    "row_count": 56790.0,
+    "num_columns": 3
+  },
+  "seriespost": {
+    "reltuples": 2720.0,
+    "relpages": 33,
+    "table_name": "seriespost",
+    "row_count": 2720.0,
+    "num_columns": 8
+  },
+  "teams": {
+    "reltuples": 27150.0,
+    "relpages": 331,
+    "table_name": "teams",
+    "row_count": 27150.0,
+    "num_columns": 47
+  },
+  "teamsfranchises": {
+    "reltuples": 1200.0,
+    "relpages": 14,
+    "table_name": "teamsfranchises",
+    "row_count": 1200.0,
+    "num_columns": 3
+  },
+  "teamshalf": {
+    "reltuples": 520.0,
+    "relpages": 6,
+    "table_name": "teamshalf",
+    "row_count": 520.0,
+    "num_columns": 9
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "tournament",
+  "num_tables": 9,
+  "num_columns": 97
+}

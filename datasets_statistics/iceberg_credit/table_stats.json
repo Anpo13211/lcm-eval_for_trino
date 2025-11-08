@@ -1,0 +1,58 @@
+{
+  "category": {
+    "reltuples": 50.0,
+    "relpages": 1,
+    "table_name": "category",
+    "row_count": 50.0,
+    "num_columns": 2
+  },
+  "charge": {
+    "reltuples": 8000000.0,
+    "relpages": 97656,
+    "table_name": "charge",
+    "row_count": 8000000.0,
+    "num_columns": 7
+  },
+  "corporation": {
+    "reltuples": 2500.0,
+    "relpages": 30,
+    "table_name": "corporation",
+    "row_count": 2500.0,
+    "num_columns": 10
+  },
+  "member": {
+    "reltuples": 50000.0,
+    "relpages": 610,
+    "table_name": "member",
+    "row_count": 50000.0,
+    "num_columns": 17
+  },
+  "payment": {
+    "reltuples": 77770.0,
+    "relpages": 949,
+    "table_name": "payment",
+    "row_count": 77770.0,
+    "num_columns": 5
+  },
+  "provider": {
+    "reltuples": 2500.0,
+    "relpages": 30,
+    "table_name": "provider",
+    "row_count": 2500.0,
+    "num_columns": 11
+  },
+  "region": {
+    "reltuples": 45.0,
+    "relpages": 1,
+    "table_name": "region",
+    "row_count": 45.0,
+    "num_columns": 8
+  },
+  "statement": {
+    "reltuples": 100000.0,
+    "relpages": 1220,
+    "table_name": "statement",
+    "row_count": 100000.0,
+    "num_columns": 5
+  }
+}

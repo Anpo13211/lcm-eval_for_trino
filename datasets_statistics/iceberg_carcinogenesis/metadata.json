@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "carcinogenesis",
+  "num_tables": 6,
+  "num_columns": 17
+}

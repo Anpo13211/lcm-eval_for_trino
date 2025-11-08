@@ -1,0 +1,142 @@
+{
+  "l_airline_id": {
+    "reltuples": 1610.0,
+    "relpages": 19,
+    "table_name": "l_airline_id",
+    "row_count": 1610.0,
+    "num_columns": 1
+  },
+  "l_airport": {
+    "reltuples": 6385.0,
+    "relpages": 77,
+    "table_name": "l_airport",
+    "row_count": 6385.0,
+    "num_columns": 1
+  },
+  "l_airport_id": {
+    "reltuples": 6370.0,
+    "relpages": 77,
+    "table_name": "l_airport_id",
+    "row_count": 6370.0,
+    "num_columns": 1
+  },
+  "l_airport_seq_id": {
+    "reltuples": 13295.0,
+    "relpages": 162,
+    "table_name": "l_airport_seq_id",
+    "row_count": 13295.0,
+    "num_columns": 1
+  },
+  "l_cancellation": {
+    "reltuples": 4.0,
+    "relpages": 1,
+    "table_name": "l_cancellation",
+    "row_count": 4.0,
+    "num_columns": 1
+  },
+  "l_city_market_id": {
+    "reltuples": 5762.0,
+    "relpages": 70,
+    "table_name": "l_city_market_id",
+    "row_count": 5762.0,
+    "num_columns": 1
+  },
+  "l_deparrblk": {
+    "reltuples": 19.0,
+    "relpages": 1,
+    "table_name": "l_deparrblk",
+    "row_count": 19.0,
+    "num_columns": 1
+  },
+  "l_distance_group_250": {
+    "reltuples": 11.0,
+    "relpages": 1,
+    "table_name": "l_distance_group_250",
+    "row_count": 11.0,
+    "num_columns": 1
+  },
+  "l_diversions": {
+    "reltuples": 7.0,
+    "relpages": 1,
+    "table_name": "l_diversions",
+    "row_count": 7.0,
+    "num_columns": 1
+  },
+  "l_months": {
+    "reltuples": 12.0,
+    "relpages": 1,
+    "table_name": "l_months",
+    "row_count": 12.0,
+    "num_columns": 1
+  },
+  "l_ontime_delay_groups": {
+    "reltuples": 15.0,
+    "relpages": 1,
+    "table_name": "l_ontime_delay_groups",
+    "row_count": 15.0,
+    "num_columns": 1
+  },
+  "l_quarters": {
+    "reltuples": 4.0,
+    "relpages": 1,
+    "table_name": "l_quarters",
+    "row_count": 4.0,
+    "num_columns": 1
+  },
+  "l_state_abr_aviation": {
+    "reltuples": 67.0,
+    "relpages": 1,
+    "table_name": "l_state_abr_aviation",
+    "row_count": 67.0,
+    "num_columns": 1
+  },
+  "l_state_fips": {
+    "reltuples": 74.0,
+    "relpages": 1,
+    "table_name": "l_state_fips",
+    "row_count": 74.0,
+    "num_columns": 1
+  },
+  "l_unique_carriers": {
+    "reltuples": 1610.0,
+    "relpages": 19,
+    "table_name": "l_unique_carriers",
+    "row_count": 1610.0,
+    "num_columns": 1
+  },
+  "l_weekdays": {
+    "reltuples": 8.0,
+    "relpages": 1,
+    "table_name": "l_weekdays",
+    "row_count": 8.0,
+    "num_columns": 1
+  },
+  "l_world_area_codes": {
+    "reltuples": 333.0,
+    "relpages": 4,
+    "table_name": "l_world_area_codes",
+    "row_count": 333.0,
+    "num_columns": 1
+  },
+  "l_yesno_resp": {
+    "reltuples": 2.0,
+    "relpages": 1,
+    "table_name": "l_yesno_resp",
+    "row_count": 2.0,
+    "num_columns": 1
+  },
+  "on_time_on_time_performance_2016_1": {
+    "reltuples": 11374666.0,
+    "relpages": 138850,
+    "table_name": "on_time_on_time_performance_2016_1",
+    "row_count": 11374666.0,
+    "num_columns": 82
+  },
+  "sample": {
+    "reltuples": 0,
+    "relpages": 0,
+    "table_name": "sample",
+    "row_count": 0,
+    "num_columns": 82
+  }
+}

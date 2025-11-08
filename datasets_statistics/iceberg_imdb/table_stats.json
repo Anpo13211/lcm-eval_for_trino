@@ -1,0 +1,149 @@
+{
+  "aka_name": {
+    "reltuples": 900232.0,
+    "relpages": 10989,
+    "table_name": "aka_name",
+    "row_count": 900232.0,
+    "num_columns": 7
+  },
+  "aka_title": {
+    "reltuples": 361472.0,
+    "relpages": 4412,
+    "table_name": "aka_title",
+    "row_count": 361472.0,
+    "num_columns": 11
+  },
+  "cast_info": {
+    "reltuples": 36126022.0,
+    "relpages": 440991,
+    "table_name": "cast_info",
+    "row_count": 36126022.0,
+    "num_columns": 6
+  },
+  "char_name": {
+    "reltuples": 3086347.0,
+    "relpages": 37675,
+    "table_name": "char_name",
+    "row_count": 3086347.0,
+    "num_columns": 6
+  },
+  "comp_cast_type": {
+    "reltuples": 4.0,
+    "relpages": 1,
+    "table_name": "comp_cast_type",
+    "row_count": 4.0,
+    "num_columns": 1
+  },
+  "company_name": {
+    "reltuples": 226368.0,
+    "relpages": 2763,
+    "table_name": "company_name",
+    "row_count": 226368.0,
+    "num_columns": 6
+  },
+  "company_type": {
+    "reltuples": 4.0,
+    "relpages": 1,
+    "table_name": "company_type",
+    "row_count": 4.0,
+    "num_columns": 1
+  },
+  "complete_cast": {
+    "reltuples": 135086.0,
+    "relpages": 1648,
+    "table_name": "complete_cast",
+    "row_count": 135086.0,
+    "num_columns": 3
+  },
+  "info_type": {
+    "reltuples": 113.0,
+    "relpages": 1,
+    "table_name": "info_type",
+    "row_count": 113.0,
+    "num_columns": 1
+  },
+  "keyword": {
+    "reltuples": 123609.0,
+    "relpages": 1508,
+    "table_name": "keyword",
+    "row_count": 123609.0,
+    "num_columns": 2
+  },
+  "kind_type": {
+    "reltuples": 7.0,
+    "relpages": 1,
+    "table_name": "kind_type",
+    "row_count": 7.0,
+    "num_columns": 1
+  },
+  "link_type": {
+    "reltuples": 18.0,
+    "relpages": 1,
+    "table_name": "link_type",
+    "row_count": 18.0,
+    "num_columns": 1
+  },
+  "movie_companies": {
+    "reltuples": 2604140.0,
+    "relpages": 31788,
+    "table_name": "movie_companies",
+    "row_count": 2604140.0,
+    "num_columns": 4
+  },
+  "movie_info": {
+    "reltuples": 16374716.0,
+    "relpages": 199886,
+    "table_name": "movie_info",
+    "row_count": 16374716.0,
+    "num_columns": 4
+  },
+  "movie_info_idx": {
+    "reltuples": 1380035.0,
+    "relpages": 16846,
+    "table_name": "movie_info_idx",
+    "row_count": 1380035.0,
+    "num_columns": 4
+  },
+  "movie_keyword": {
+    "reltuples": 4523930.0,
+    "relpages": 55223,
+    "table_name": "movie_keyword",
+    "row_count": 4523930.0,
+    "num_columns": 2
+  },
+  "movie_link": {
+    "reltuples": 29997.0,
+    "relpages": 366,
+    "table_name": "movie_link",
+    "row_count": 29997.0,
+    "num_columns": 3
+  },
+  "name": {
+    "reltuples": 4167424.0,
+    "relpages": 50871,
+    "table_name": "name",
+    "row_count": 4167424.0,
+    "num_columns": 8
+  },
+  "person_info": {
+    "reltuples": 2232142.0,
+    "relpages": 27247,
+    "table_name": "person_info",
+    "row_count": 2232142.0,
+    "num_columns": 4
+  },
+  "role_type": {
+    "reltuples": 12.0,
+    "relpages": 1,
+    "table_name": "role_type",
+    "row_count": 12.0,
+    "num_columns": 1
+  },
+  "title": {
+    "reltuples": 2525289.0,
+    "relpages": 30826,
+    "table_name": "title",
+    "row_count": 2525289.0,
+    "num_columns": 11
+  }
+}

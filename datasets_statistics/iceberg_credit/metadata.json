@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "credit",
+  "num_tables": 8,
+  "num_columns": 65
+}

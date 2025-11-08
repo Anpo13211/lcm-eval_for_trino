@@ -1,0 +1,6 @@
+{
+  "catalog": "iceberg",
+  "schema": "ssb",
+  "num_tables": 5,
+  "num_columns": 53
+}
