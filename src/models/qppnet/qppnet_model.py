@@ -89,13 +89,14 @@ class NeuralUnit(nn.Module):
 class QPPNet(nn.Module):
     """ QPPNet Architecture"""
 
-    def __init__(self, model_config: QPPNetModelConfig, workload_runs: WorkloadRuns, feature_statistics: dict, label_norm=None):
+    def __init__(self, model_config: QPPNetModelConfig, workload_runs: WorkloadRuns, feature_statistics: dict, label_norm=None, use_global_loss=False):
         super().__init__()
         self.device = model_config.device
         self.hidden_dim = model_config.hidden_dim_plan
         self.batch_size = model_config.batch_size
         self.feature_statistics = feature_statistics
         self.operator_types = model_config.featurization.QPP_NET_OPERATOR_TYPES
+        self.use_global_loss = use_global_loss  # Trino等でクエリ全体のlossを使う場合True
 
         # If the dataset does not contain any indexes, remove index nodes from the operator types to prevent errors
         # and to make the model faster. This is the case for TPC_H
@@ -145,7 +146,13 @@ class QPPNet(nn.Module):
         # Read out most important information from query
         node_properties = query_plan.properties
         node_type = query_plan.node_type
-        label = torch.tensor(node_properties.pop("Actual Total Time")).to(self.device)
+        
+        # グローバルlossモードの場合、演算子レベルのActual Total Timeは不要
+        if not self.use_global_loss:
+            label = torch.tensor(node_properties.pop("Actual Total Time")).to(self.device)
+        else:
+            label = None
+        
         assert node_type in self.operator_types.keys(), f"Unseen operator of type {node_type} faced in query"
         features = query_plan.encoded_features
 
@@ -153,6 +160,15 @@ class QPPNet(nn.Module):
         for children in query_plan.children:
             child_pred_vector, _ = self.forward_single_query(children)
             features = torch.cat((features, child_pred_vector), axis=0)
+
+        # 入力次元を調整（Trinoでは子ノードの数が想定より少ないことがある）
+        expected_input_dim = self.neural_units[node_type].dense_block[0].in_features
+        if features.shape[0] < expected_input_dim:
+            pad_size = expected_input_dim - features.shape[0]
+            pad = torch.zeros(pad_size, device=features.device)
+            features = torch.cat((features, pad), axis=0)
+        elif features.shape[0] > expected_input_dim:
+            features = features[:expected_input_dim]
 
         if torch.isnan(features).any():
             raise ValueError(f"Features {features} for {node_type} have Nan values.")
@@ -168,8 +184,9 @@ class QPPNet(nn.Module):
         # We apply a lower bound of predictions to avoid nans, as otherwise runtime can be 0 and q-error infinite.
         predicted_operator_time = torch.max(predicted_operator_time, torch.tensor(0.1).to(self.device))
 
-        # Compute and collect loss for current node type
-        self.loss_fxn.update_operator_loss(node_type=node_type, predicted_operator_time=predicted_operator_time, label=label)
+        # 演算子レベルのloss計算（グローバルlossモードでは実行しない）
+        if not self.use_global_loss and label is not None:
+            self.loss_fxn.update_operator_loss(node_type=node_type, predicted_operator_time=predicted_operator_time, label=label)
 
         return pred_vector, predicted_operator_time / 1000
 
@@ -183,15 +200,22 @@ class QPPNet(nn.Module):
         query_plans: list[OperatorTree] = input
         predictions: list[torch.Tensor] = []
 
-        self.loss_fxn.reset_accumulated_losses()
+        # グローバルlossモード以外では演算子レベルのlossをリセット
+        if not self.use_global_loss:
+            self.loss_fxn.reset_accumulated_losses()
 
         # Iterate over all query plans and forward them
         for query_plan in query_plans:
             _, pred = self.forward_single_query(query_plan)
             predictions.append(pred)
-            self.loss_fxn.update_total_losses()
+            # グローバルlossモード以外では演算子レベルのlossを累積
+            if not self.use_global_loss:
+                self.loss_fxn.update_total_losses()
 
-        return torch.tensor(predictions)
+        if predictions:
+            return torch.stack(predictions).squeeze(-1)
+        else:
+            return torch.tensor([])
 
     def backward(self):
         # Do step on all operator-level optimizers

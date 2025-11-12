@@ -212,6 +212,25 @@ class TrinoPlanOperator(AbstractPlanOperator):
                     criteria = op_line[start:end]
                     self._set_param('criteria', criteria)
         
+        # Distribution情報を抽出（Join演算子の場合）
+        # distribution = REPLICATED (broadcast) または PARTITIONED (hash distributed)
+        if 'distribution = ' in op_line:
+            start = op_line.find('distribution = ')
+            if start != -1:
+                start += len('distribution = ')
+                # カンマまたは角括弧まで抽出
+                end = start
+                for i, char in enumerate(op_line[start:], start):
+                    if char in [',', ']', ')']:
+                        end = i
+                        break
+                else:
+                    end = len(op_line)
+                
+                if end > start:
+                    distribution = op_line[start:end].strip()
+                    self._set_param('distribution', distribution)
+        
         # フィルター条件を抽出
         if 'filterPredicate = ' in op_line:
             start = op_line.find('filterPredicate = ')

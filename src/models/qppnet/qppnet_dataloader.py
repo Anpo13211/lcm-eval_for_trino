@@ -18,7 +18,8 @@ def create_qppnet_dataloader(workload_runs: WorkloadRuns,
                              statistics_file: Path,
                              model_config: QPPNetModelConfig,
                              column_statistics: Path,
-                             data_loader_options: DataLoaderOptions) \
+                             data_loader_options: DataLoaderOptions,
+                             use_trino: bool = False) \
         -> (Optional[Pipeline], dict, Optional[DataLoader], Optional[DataLoader], List[Optional[DataLoader]]):
 
     feature_statistics = load_json(statistics_file, namespace=False)
@@ -55,7 +56,8 @@ def create_qppnet_dataloader(workload_runs: WorkloadRuns,
                                                  db_statistics=database_statistics,
                                                  feature_statistics=feature_statistics,
                                                  column_statistics=column_statistics,
-                                                 plan_featurization=model_config.featurization)
+                                                 plan_featurization=model_config.featurization,
+                                                 use_trino=use_trino)
 
         dataloader_args.update(collate_fn=train_collate_fn)
         train_loader = DataLoader(train_dataset, **dataloader_args)
@@ -75,7 +77,8 @@ def create_qppnet_dataloader(workload_runs: WorkloadRuns,
                                                  db_statistics=database_statistics,
                                                  feature_statistics=feature_statistics,
                                                  column_statistics=column_statistics,
-                                                 plan_featurization=model_config.featurization)
+                                                 plan_featurization=model_config.featurization,
+                                                 use_trino=use_trino)
 
             dataloader_args.update(collate_fn=train_collate_fn)
             test_loaders.append(DataLoader(test_dataset, **dataloader_args))
@@ -123,8 +126,7 @@ def create_datasets(workload_run_paths,
     return label_norm, train_dataset, val_dataset, database_statistics
 
 
-def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict = None, column_statistics: dict = None, plan_featurization=None):
-    labels = []
+def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict = None, column_statistics: dict = None, plan_featurization=None, use_trino=False):
     labels = []
     query_plans = []
 
@@ -132,16 +134,38 @@ def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict 
     sample_idxs = []
     errors = []
     for sample_idx, p in plans:
-        query_plan: OperatorTree = operator_tree_from_json(vars(p))
-        #if query_plan.min_cardinality() != 0:
         try:
+            # Trinoの場合はアダプターで変換
+            if use_trino:
+                from models.qppnet.trino_adapter import adapt_trino_plan_to_qppnet
+                # pがTrinoPlanOperatorの場合、そのまま変換
+                plan_dict = adapt_trino_plan_to_qppnet(p)
+                query_plan: OperatorTree = operator_tree_from_json(plan_dict)
+            else:
+                # PostgreSQLの場合は従来通り
+                query_plan: OperatorTree = operator_tree_from_json(vars(p))
+            
+            # Debug: Print tree structure for first plan
+            if sample_idx == 0 and use_trino:
+                print(f"\n[DEBUG] Sample plan tree structure:")
+                def print_tree(node, depth=0):
+                    print(f"{'  ' * depth}{node.node_type} (children: {len(node.children)})")
+                    for child in node.children:
+                        print_tree(child, depth + 1)
+                print_tree(query_plan)
+            
+            #if query_plan.min_cardinality() != 0:
             query_plan.encode_recursively(column_statistics, feature_statistics, plan_featurization)
             sample_idxs.append(sample_idx)
             labels.append(query_plan.runtime)
             query_plans.append(query_plan)
-        except ValueError as e:
-            errors.append(e)
+        except (ValueError, KeyError, AttributeError) as e:
+            errors.append((sample_idx, str(e)))
 
     if errors:
-        print(errors)
+        print(f"Encoding errors: {len(errors)}/{len(plans)}")
+        # 最初の数個だけ詳細を表示
+        for i, (idx, err_msg) in enumerate(errors[:3]):
+            print(f"  Error {i+1} (sample {idx}): {err_msg[:100]}")
+    
     return query_plans, labels, sample_idxs

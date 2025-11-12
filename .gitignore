@@ -25,6 +25,8 @@ __pycache__/
 *.pt
 *.pth
 *.model
+*.models_test*
+*.log_test*
 
 # Environment files
 .env

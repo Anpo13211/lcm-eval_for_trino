@@ -140,3 +140,73 @@ class QPPLoss(torch.nn.Module):
         out = torch.mean(self.total_loss)
         self.reset_accumulated_losses()
         return out
+
+
+class QPPLossGlobal(torch.nn.Module):
+    """
+    QPPNet用のグローバルloss（クエリ全体の実行時間を予測）
+    
+    各演算子レベルではなく、クエリ全体のwall timeで学習する。
+    Trinoなど、演算子単位のwall timeが取得できない場合に使用。
+    
+    Usage:
+        # モデル初期化時
+        model_config.loss_class_name = 'QPPLossGlobal'
+        model_config.loss_class_kwargs = {'loss_type': 'mse'}  # or 'qerror'
+        
+        # 学習時
+        predictions = model(query_plans)  # クエリ全体の予測時間のリスト
+        loss = model.loss_fxn(predictions, labels)  # labelsはクエリ全体の実行時間
+    """
+    
+    def __init__(self, model, loss_type='mse', min_val=1e-3, **loss_kwargs):
+        """
+        Args:
+            model: QPPNetモデル
+            loss_type: 'mse' or 'qerror'
+            min_val: Q-error計算時の最小値
+        """
+        super().__init__()
+        self.device = model.device
+        self.loss_type = loss_type
+        self.min_val = min_val
+    
+    def forward(self, input, target) -> torch.Tensor:
+        """
+        Args:
+            input: 予測値のテンソル [batch_size]
+            target: 実測値のテンソル [batch_size]
+        
+        Returns:
+            loss: スカラーテンソル
+        """
+        # テンソルを1次元に整形
+        input = input.view(-1)
+        target = target.view(-1)
+        
+        # デバイスの統一
+        if target.device != input.device:
+            target = target.to(input.device)
+        
+        if self.loss_type == 'mse':
+            # MSE loss（平方根を取る）
+            loss = torch.sqrt(torch.mean((input - target) ** 2) + 1e-6)
+            
+        elif self.loss_type == 'qerror':
+            # Q-error loss
+            # ゼロ値の処理
+            input_safe = torch.clamp(input, min=self.min_val)
+            target_safe = torch.clamp(target, min=self.min_val)
+            
+            # Q-errorの計算
+            q_error = torch.max(input_safe / target_safe, target_safe / input_safe)
+            loss = torch.mean(q_error)
+            
+        else:
+            raise ValueError(f"Unknown loss_type: {self.loss_type}. Use 'mse' or 'qerror'")
+        
+        # NaN/Infチェック
+        if torch.isnan(loss) or torch.isinf(loss):
+            raise ValueError(f"Loss was {loss} for predictions: {input}, labels: {target}")
+        
+        return loss

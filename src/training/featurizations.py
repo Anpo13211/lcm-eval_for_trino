@@ -31,8 +31,7 @@ class FlatModelActCardFeaturization(Featurization):
 
 class QPPNetFeaturization(Featurization):
     PLAN_FEATURES = ['Plan Width', 'Plan Rows', 'Total Cost']
-    JOIN_FEATURES = ['Join Type', 'Parent Relationship']
-    # Warning: 'Hash Algorithm' mentioned in the paper, but not existing in query plans
+    JOIN_FEATURES = ['Join Type', 'Parent Relationship', 'Hash Algorithm']  # Hash Algorithm added for Trino
     HASH_FEATURES = ['Hash Buckets', 'Peak Memory Usage']
     SORT_FEATURES = ['Sort Key', 'Sort Method']
     SCAN_FEATURES = ['Relation Name', 'Min', 'Max', 'Mean']
