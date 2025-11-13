@@ -29,12 +29,18 @@ mkdir -p "$LOGS_DIR"
 # デバイス設定（GPUがある場合は cuda:0、なければ cpu）
 DEVICE="cpu"
 
-# 共通パラメータ（全モデルで統一）
+# 共通パラメータ
 EPOCHS=100
 BATCH_SIZE=32
 HIDDEN_DIM=256
 LEARNING_RATE=0.001
 DBMS="trino"
+
+# モデル固有のハイパーパラメータ（元論文の実装に合わせる）
+DACE_HIDDEN_DIM=128
+QUERYFORMER_BATCH_SIZE=16
+QPPNET_EPOCHS=50
+QPPNET_HIDDEN_DIM=128
 
 echo "================================================================================"
 echo "Leave-One-Out Cross-Validation Training - All Models"
@@ -45,11 +51,16 @@ echo "Statistics Directory: $STATISTICS_DIR"
 echo "Output Directory: $OUTPUT_DIR"
 echo "Device: $DEVICE"
 echo ""
-echo "Unified Hyperparameters:"
+echo "Common Hyperparameters:"
 echo "  Epochs: $EPOCHS"
 echo "  Batch Size: $BATCH_SIZE"
 echo "  Hidden Dim: $HIDDEN_DIM"
 echo "  Learning Rate: $LEARNING_RATE"
+echo "Model-specific overrides:"
+echo "  DACE hidden dim: $DACE_HIDDEN_DIM"
+echo "  QueryFormer batch size: $QUERYFORMER_BATCH_SIZE"
+echo "  QPPNet epochs: $QPPNET_EPOCHS"
+echo "  QPPNet hidden dim: $QPPNET_HIDDEN_DIM"
 echo "================================================================================"
 echo "Start Time: $(date)"
 echo "================================================================================"
@@ -90,7 +101,7 @@ run_dace() {
         --dbms "$DBMS" \
         --epochs "$EPOCHS" \
         --batch_size "$BATCH_SIZE" \
-        --hidden_dim "$HIDDEN_DIM" \
+        --hidden_dim "$DACE_HIDDEN_DIM" \
         --node_length 22 \
         --lr "$LEARNING_RATE" \
         --device "$DEVICE"
@@ -113,7 +124,7 @@ run_queryformer() {
         --output_dir "$OUTPUT_DIR/queryformer_loo" \
         --dbms "$DBMS" \
         --epochs "$EPOCHS" \
-        --batch_size "$BATCH_SIZE" \
+        --batch_size "$QUERYFORMER_BATCH_SIZE" \
         --hidden_dim "$HIDDEN_DIM" \
         --lr "$LEARNING_RATE" \
         --device "$DEVICE" \
@@ -135,9 +146,9 @@ run_qppnet() {
     python -m training.scripts.train_qppnet_loo \
         --data_dir "$DATA_DIR" \
         --output_dir "$OUTPUT_DIR/qppnet_loo" \
-        --epochs "$EPOCHS" \
+        --epochs "$QPPNET_EPOCHS" \
         --batch_size "$BATCH_SIZE" \
-        --hidden_dim "$HIDDEN_DIM" \
+        --hidden_dim "$QPPNET_HIDDEN_DIM" \
         --lr "$LEARNING_RATE" \
         --device "$DEVICE" \
         --statistics_dir "$STATISTICS_DIR"
