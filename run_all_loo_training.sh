@@ -7,10 +7,11 @@
 #   ./run_all_loo_training.sh
 #
 # または個別実行:
-#   ./run_all_loo_training.sh flat      # Flat Vector のみ
-#   ./run_all_loo_training.sh dace      # DACE のみ
+#   ./run_all_loo_training.sh flat         # Flat Vector のみ
+#   ./run_all_loo_training.sh dace         # DACE のみ
 #   ./run_all_loo_training.sh queryformer  # QueryFormer のみ
-#   ./run_all_loo_training.sh zeroshot  # Zero-Shot のみ
+#   ./run_all_loo_training.sh qppnet       # QPPNet のみ
+#   ./run_all_loo_training.sh zeroshot     # Zero-Shot のみ
 ################################################################################
 
 set -e  # エラーで停止
@@ -57,7 +58,7 @@ echo
 # 関数定義
 run_flat() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "1/4: Flat Vector Model (LightGBM)"
+    echo "1/5: Flat Vector Model (LightGBM)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Starting: $(date)"
     echo
@@ -77,7 +78,7 @@ run_flat() {
 
 run_dace() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "2/4: DACE Model"
+    echo "2/5: DACE Model"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Starting: $(date)"
     echo
@@ -101,7 +102,7 @@ run_dace() {
 
 run_queryformer() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "3/4: QueryFormer Model"
+    echo "3/5: QueryFormer Model"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Starting: $(date)"
     echo
@@ -123,9 +124,32 @@ run_queryformer() {
     echo
 }
 
+run_qppnet() {
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "4/5: QPPNet Model"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Starting: $(date)"
+    echo
+    
+    cd "$PROJECT_ROOT/src"
+    python -m training.scripts.train_qppnet_loo \
+        --data_dir "$DATA_DIR" \
+        --output_dir "$OUTPUT_DIR/qppnet_loo" \
+        --epochs "$EPOCHS" \
+        --batch_size "$BATCH_SIZE" \
+        --hidden_dim "$HIDDEN_DIM" \
+        --lr "$LEARNING_RATE" \
+        --device "$DEVICE" \
+        --statistics_dir "$STATISTICS_DIR"
+    
+    echo
+    echo "✅ QPPNet completed: $(date)"
+    echo
+}
+
 run_zeroshot() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "4/4: Zero-Shot Model"
+    echo "5/5: Zero-Shot Model"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Starting: $(date)"
     echo
@@ -153,6 +177,7 @@ if [ $# -eq 0 ]; then
     run_flat
     run_dace
     run_queryformer
+    run_qppnet
     run_zeroshot
 elif [ "$1" = "flat" ]; then
     run_flat
@@ -160,14 +185,17 @@ elif [ "$1" = "dace" ]; then
     run_dace
 elif [ "$1" = "queryformer" ]; then
     run_queryformer
+elif [ "$1" = "qppnet" ]; then
+    run_qppnet
 elif [ "$1" = "zeroshot" ]; then
     run_zeroshot
 else
-    echo "Usage: $0 [flat|dace|queryformer|zeroshot]"
+    echo "Usage: $0 [flat|dace|queryformer|qppnet|zeroshot]"
     echo "  No argument: Run all models"
     echo "  flat: Run Flat Vector only"
     echo "  dace: Run DACE only"
     echo "  queryformer: Run QueryFormer only"
+    echo "  qppnet: Run QPPNet only"
     echo "  zeroshot: Run Zero-Shot only"
     exit 1
 fi
@@ -181,6 +209,7 @@ echo "Results saved to:"
 [ -f "$OUTPUT_DIR/flat_loo/trino_leave_one_out_results.json" ] && echo "  ✓ $OUTPUT_DIR/flat_loo/trino_leave_one_out_results.json"
 [ -f "$OUTPUT_DIR/dace_loo/trino_leave_one_out_results.json" ] && echo "  ✓ $OUTPUT_DIR/dace_loo/trino_leave_one_out_results.json"
 [ -f "$OUTPUT_DIR/queryformer_loo/trino_leave_one_out_results.json" ] && echo "  ✓ $OUTPUT_DIR/queryformer_loo/trino_leave_one_out_results.json"
+[ -f "$OUTPUT_DIR/qppnet_loo/summary.json" ] && echo "  ✓ $OUTPUT_DIR/qppnet_loo/summary.json"
 [ -f "$OUTPUT_DIR/zeroshot_loo/trino_leave_one_out_results.json" ] && echo "  ✓ $OUTPUT_DIR/zeroshot_loo/trino_leave_one_out_results.json"
 echo
 
@@ -189,5 +218,6 @@ echo "  cd $OUTPUT_DIR"
 echo "  cat flat_loo/trino_leave_one_out_results.json | jq '.average_metrics'"
 echo "  cat dace_loo/trino_leave_one_out_results.json | jq '.average_metrics'"
 echo "  cat queryformer_loo/trino_leave_one_out_results.json | jq '.average_metrics'"
+echo "  cat qppnet_loo/summary.json | jq '.'"
 echo "  cat zeroshot_loo/trino_leave_one_out_results.json | jq '.average_metrics'"
 

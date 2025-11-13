@@ -126,7 +126,7 @@ def create_datasets(workload_run_paths,
     return label_norm, train_dataset, val_dataset, database_statistics
 
 
-def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict = None, column_statistics: dict = None, plan_featurization=None, use_trino=False):
+def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict = None, column_statistics: dict = None, plan_featurization=None, use_trino=False, debug_print=False):
     labels = []
     query_plans = []
 
@@ -146,7 +146,7 @@ def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict 
                 query_plan: OperatorTree = operator_tree_from_json(vars(p))
             
             # Debug: Print tree structure for first plan
-            if sample_idx == 0 and use_trino:
+            if sample_idx == 0 and use_trino and debug_print:
                 print(f"\n[DEBUG] Sample plan tree structure:")
                 def print_tree(node, depth=0):
                     print(f"{'  ' * depth}{node.node_type} (children: {len(node.children)})")
@@ -162,7 +162,7 @@ def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict 
         except (ValueError, KeyError, AttributeError) as e:
             errors.append((sample_idx, str(e)))
 
-    if errors:
+    if errors and debug_print:
         print(f"Encoding errors: {len(errors)}/{len(plans)}")
         # 最初の数個だけ詳細を表示
         for i, (idx, err_msg) in enumerate(errors[:3]):

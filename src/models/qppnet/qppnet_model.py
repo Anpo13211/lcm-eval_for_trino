@@ -1,4 +1,5 @@
 from typing import Tuple
+import os
 
 import torch
 import torch.nn as nn
@@ -8,6 +9,9 @@ from classes.classes import QPPNetModelConfig
 from classes.workload_runs import WorkloadRuns
 from training import losses
 from models.zeroshot.postgres_plan_batching import add_numerical_scalers
+
+
+QPPNET_VERBOSE = os.environ.get("QPPNET_VERBOSE", "").lower() in {"1", "true", "yes"}
 
 
 class NeuralUnit(nn.Module):
@@ -44,10 +48,10 @@ class NeuralUnit(nn.Module):
         if node_type == "Bitmap Heap Scan":
             input_dim = input_dim + output_dim
 
-        #print(node_type, len(features))
-        print(f"Initializing neural unit for {node_type} "
-              f"with input_dim {input_dim} "
-              f"and output_dim: {output_dim}")
+        if QPPNET_VERBOSE:
+            print(f"Initializing neural unit for {node_type} "
+                  f"with input_dim {input_dim} "
+                  f"and output_dim: {output_dim}")
 
         self.node_type = node_type
         self.dense_block = self.build_block(num_layers=num_layers,

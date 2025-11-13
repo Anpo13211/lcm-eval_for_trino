@@ -108,8 +108,12 @@ class OperatorTree:
                 elif feature_statistics[feature_name].get('type') == str(FeatureType.categorical):
                     value_dict = feature_statistics[feature_name]['value_dict']
                     if value not in value_dict.keys():
-                        raise ValueError(f"Value {value} not found in value dictionary of feature {feature_name}")
-                    hot_idx = value_dict[value]
+                        if 'unknown' in value_dict.keys():
+                            hot_idx = value_dict['unknown']
+                        else:
+                            raise ValueError(f"Value {value} not found in value dictionary of feature {feature_name}")
+                    else:
+                        hot_idx = value_dict[value]
                     no_feats = feature_statistics[feature_name]['no_vals']
                     one_hot_vec = np.zeros(no_feats)
                     one_hot_vec[hot_idx] = 1

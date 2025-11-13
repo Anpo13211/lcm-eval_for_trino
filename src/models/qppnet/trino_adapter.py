@@ -14,6 +14,7 @@ TRINO_TO_POSTGRES_OP_MAPPING = {
     'TableScan': 'Seq Scan',
     'ScanFilter': 'Seq Scan',
     'ScanFilterProject': 'Seq Scan',
+    'ScanProject': 'Seq Scan',
     'Filter': 'Result',
     'FilterProject': 'Result',
     'Project': 'Result',
