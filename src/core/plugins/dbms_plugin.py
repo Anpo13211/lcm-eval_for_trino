@@ -22,8 +22,6 @@ class DBMSPlugin(ABC):
     - Plan parsing capability
     - Statistics conversion to standardized format
     - Database connection management
-    
-    Implementation cost per DBMS: ~400 lines
     """
     
     name: str  # e.g., "postgres", "trino"

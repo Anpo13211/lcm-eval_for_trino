@@ -62,11 +62,9 @@ def unified_dace_collator(
     
     # Stack to tensors
     seq_encodings = torch.stack(seq_encodings)
-    # Attention masks: TransformerEncoder expects (seq_len, seq_len) for all batches
-    # Since all samples use the same pad_length, we can use the first mask for all
-    # Note: This assumes all masks are identical due to padding structure
-    # For per-sample masks, we would need to modify the model's forward pass
-    attention_mask = attention_masks[0] if attention_masks else None
+    # Attention masks: Stack all masks as 3D tensor (batch, seq_len, seq_len)
+    # Each sample has its own attention mask based on its tree structure
+    attention_mask = torch.stack(attention_masks) if attention_masks else None
     loss_masks = torch.stack(loss_masks)
     run_times_tensor = torch.stack(run_times_list)
     labels = torch.tensor(labels, dtype=torch.float32)
