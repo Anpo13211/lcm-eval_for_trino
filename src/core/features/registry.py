@@ -353,3 +353,54 @@ def list_features(feature_type: FeatureType = None) -> list:
         if mapping.feature_type == feature_type
     ]
 
+
+# ============================================================================
+# PLUGIN-BASED EXTENSION API
+# ============================================================================
+
+def register_dbms_aliases(dbms_name: str, feature_aliases: dict) -> None:
+    """
+    Register additional feature aliases for a DBMS via plugin.
+    
+    This allows plugins to extend the feature mapping without editing this file.
+    
+    Args:
+        dbms_name: DBMS name (e.g., "mysql", "oracle")
+        feature_aliases: Dict mapping logical_name → dbms_specific_name
+                        e.g., {"operator_type": "operation_name", ...}
+    
+    Example:
+        # In MySQLPlugin.get_feature_aliases():
+        return {
+            "operator_type": "select_type",
+            "estimated_cardinality": "rows_estimate",
+            ...
+        }
+        
+        # Then during plugin initialization:
+        register_dbms_aliases("mysql", plugin.get_feature_aliases())
+    """
+    for logical_name, dbms_attr in feature_aliases.items():
+        if logical_name in FEATURE_REGISTRY:
+            mapping = FEATURE_REGISTRY[logical_name]
+            # Add or update the alias for this DBMS
+            mapping.dbms_aliases[dbms_name] = dbms_attr
+        else:
+            # Warn about unknown logical feature
+            print(f"Warning: Logical feature '{logical_name}' not found in registry. "
+                  f"Skipping alias registration for {dbms_name}.")
+
+
+def get_registered_dbms() -> list:
+    """
+    Get list of DBMS that have registered feature aliases.
+    
+    Returns:
+        List of DBMS names with at least one feature alias
+    """
+    all_dbms = set()
+    for mapping in FEATURE_REGISTRY.values():
+        all_dbms.update(mapping.dbms_aliases.keys())
+    return sorted(all_dbms)
+
+

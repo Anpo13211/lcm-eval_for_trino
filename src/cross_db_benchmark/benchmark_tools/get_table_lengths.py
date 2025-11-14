@@ -5,7 +5,7 @@ from cross_db_benchmark.benchmark_tools.database import DatabaseSystem
 from cross_db_benchmark.benchmark_tools.load_database import create_db_conn
 
 def get_table_rows(db_name):
-    db_conn = create_db_conn(database=DatabaseSystem.POSTGRES,
+    db_conn = create_db_conn(database='postgres',  # Changed from DatabaseSystem.POSTGRES
                              db_name=db_name,
                              database_conn_args=dict(user="postgres", password="bM2YGRAX*bG_QAilUid§2iD", host="localhost"),
                              database_kwarg_dict=dict())

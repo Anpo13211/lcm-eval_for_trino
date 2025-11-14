@@ -765,8 +765,10 @@ def main():
                        help='Schema/database name')
     
     # Optional arguments
+    # Get available DBMS from registry
+    available_dbms = DBMSRegistry.get_cli_choices() if DBMSRegistry.list_plugins() else ['trino', 'postgres', 'mysql']
     parser.add_argument('--dbms', type=str, default='trino',
-                       choices=['trino', 'postgres', 'mysql'],
+                       choices=available_dbms,
                        help='DBMS name')
     parser.add_argument('--output_dir', type=str, default='models/unified_zeroshot',
                        help='Output directory')

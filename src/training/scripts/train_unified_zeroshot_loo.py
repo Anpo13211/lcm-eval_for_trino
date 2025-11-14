@@ -700,8 +700,10 @@ def main():
     
     parser.add_argument('--data_dir', type=str, required=True,
                        help='Directory containing all dataset files')
+    # Get available DBMS from registry
+    available_dbms = DBMSRegistry.get_cli_choices() if DBMSRegistry.list_plugins() else ['trino', 'postgres', 'mysql']
     parser.add_argument('--dbms', type=str, default='trino',
-                       choices=['trino', 'postgres', 'mysql'],
+                       choices=available_dbms,
                        help='DBMS name')
     parser.add_argument('--output_dir', type=str, default='models/zeroshot_loo',
                        help='Output directory')

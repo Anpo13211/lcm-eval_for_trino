@@ -18,7 +18,8 @@ import dgl
 
 from core.graph.converter import UnifiedPlanConverter
 from core.statistics.schema import StandardizedStatistics
-from core.statistics.converter import StatisticsConverter, PostgreSQLStatisticsConverter, TrinoStatisticsConverter
+from core.statistics.converter import StatisticsConverter
+from core.plugins.registry import DBMSRegistry
 from training.featurizations import Featurization
 
 
@@ -245,12 +246,12 @@ def _ensure_standardized_statistics(
                 return value
         
         # Otherwise, assume it's DBMS-specific format and convert
-        if dbms_name == "postgres":
-            converter = PostgreSQLStatisticsConverter()
-        elif dbms_name == "trino":
-            converter = TrinoStatisticsConverter()
-        else:
-            # Unknown DBMS, return empty statistics
+        # Get converter from registry (O(1) lookup, no if-elif chain!)
+        try:
+            converter = DBMSRegistry.get_statistics_converter(dbms_name)
+        except KeyError:
+            # DBMS not registered or no converter available
+            # Return empty statistics as fallback
             return StandardizedStatistics()
         
         # If db_statistics is a dict with a single key, extract that
@@ -263,11 +264,11 @@ def _ensure_standardized_statistics(
     
     # If it's a SimpleNamespace or object, try to convert
     if hasattr(db_statistics, '__dict__'):
-        if dbms_name == "postgres":
-            converter = PostgreSQLStatisticsConverter()
-        elif dbms_name == "trino":
-            converter = TrinoStatisticsConverter()
-        else:
+        # Get converter from registry (same as above)
+        try:
+            converter = DBMSRegistry.get_statistics_converter(dbms_name)
+        except KeyError:
+            # DBMS not registered or no converter available
             return StandardizedStatistics()
         
         return converter.convert(db_statistics)

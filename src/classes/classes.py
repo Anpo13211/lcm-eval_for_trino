@@ -19,6 +19,7 @@ from training.featurizations import Featurization, DACEFeaturization, QPPNetFeat
     PostgresEstSystemCardDetail, DACEFeaturizationNoCosts, QPPNetNoCostsFeaturization, FlatModelFeaturization, \
     FlatModelActCardFeaturization, QPPNetActCardsFeaturization, PostgresTrueCardDetail, DACEActCardFeaturization
 from models.zeroshot.postgres_plan_batching import postgres_plan_collator
+from core.graph.unified_collator import unified_plan_collator
 
 
 class TrainingServers:
@@ -332,9 +333,13 @@ class ZeroShotModelConfig(ModelConfig):
     output_dim: int = 1
     batch_size: int = 64
     tree_layer_name: str = 'MscnConv'  # GATConv MscnConv
+    # database: Can be DatabaseSystem enum OR string (e.g., 'postgres', 'trino')
+    # For new code, prefer string to leverage plugin registry
     database: DatabaseSystem = DatabaseSystem.POSTGRES
     batch_to_func: Callable = batch_to
-    collator_func: Callable = postgres_plan_collator
+    # collator_func: Now using unified_plan_collator (works for all DBMS)
+    # Legacy postgres_plan_collator still available for backward compatibility
+    collator_func: Callable = unified_plan_collator  # Changed from postgres_plan_collator
     execution_mode: ExecutionMode = ExecutionMode.RAW_OUTPUT
     device: str = "cuda:0"
     input_format: str = InputFormats.parsed

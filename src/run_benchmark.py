@@ -29,8 +29,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', default=None)
     parser.add_argument('--dataset', default=None)
-    parser.add_argument('--database', default=DatabaseSystem.POSTGRES, type=DatabaseSystem,
-                        choices=list(DatabaseSystem))
+    # Get available DBMS from registry (with fallback)
+    try:
+        from core.plugins.registry import DBMSRegistry
+        available_dbms = DBMSRegistry.get_cli_choices() if DBMSRegistry.list_plugins() else ['postgres', 'trino']
+    except:
+        available_dbms = ['postgres', 'trino']
+    
+    parser.add_argument('--database', default='postgres', type=str,
+                        choices=available_dbms)
     parser.add_argument('--db_name', default=None)
     parser.add_argument("--database_conn", dest='database_conn_dict', action=StoreDictKeyPair,
                         metavar="KEY1=VAL1,KEY2=VAL2...")

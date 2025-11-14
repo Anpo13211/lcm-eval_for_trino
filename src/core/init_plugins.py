@@ -50,6 +50,16 @@ def initialize_plugins():
     # except Exception as e:
     #     print(f"Warning: Could not register MySQL plugin: {e}")
     
+    # Register feature aliases from plugins
+    from core.features.registry import register_dbms_aliases
+    
+    for plugin_name in DBMSRegistry.list_plugins():
+        plugin = DBMSRegistry.get_plugin(plugin_name)
+        feature_aliases = plugin.get_feature_aliases()
+        if feature_aliases:
+            register_dbms_aliases(plugin_name, feature_aliases)
+            print(f"  Registered {len(feature_aliases)} feature aliases for {plugin_name}")
+    
     # Print summary
     plugins = DBMSRegistry.list_plugins()
     print(f"\nRegistered {len(plugins)} DBMS plugins:")

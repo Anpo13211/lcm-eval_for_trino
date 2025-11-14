@@ -18,7 +18,7 @@ Usage:
     converter = DBMSRegistry.get_statistics_converter("postgres")
 """
 
-from typing import Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 import threading
 
 from .dbms_plugin import DBMSPlugin
@@ -280,6 +280,129 @@ class DBMSRegistry:
             name: plugin.get_metadata()
             for name, plugin in cls._plugins.items()
         }
+    
+    @classmethod
+    def list_supported_dbms(cls) -> List[Dict[str, Any]]:
+        """
+        List all registered DBMS with their metadata.
+        
+        Returns:
+            List of dictionaries containing plugin metadata
+        """
+        result = []
+        for name, plugin in cls._plugins.items():
+            metadata = plugin.get_metadata()
+            metadata.setdefault('name', name)
+            metadata.setdefault('display_name', plugin.display_name)
+            result.append(metadata)
+        return result
+    
+    @classmethod
+    def get_display_name(cls, name: str) -> str:
+        """
+        Get human-readable display name for a DBMS.
+        
+        Args:
+            name: Plugin name (e.g., "postgres")
+            
+        Returns:
+            Display name (e.g., "PostgreSQL")
+            
+        Raises:
+            KeyError: If DBMS not registered
+        """
+        plugin = cls._plugins.get(name)
+        if plugin is None:
+            raise KeyError(
+                f"DBMS '{name}' not registered. "
+                f"Available: {list(cls._plugins.keys())}"
+            )
+        return plugin.display_name
+    
+    @classmethod
+    def get_capabilities(cls, name: str) -> Dict[str, Any]:
+        """
+        Get capability flags for a DBMS.
+        
+        Args:
+            name: Plugin name
+            
+        Returns:
+            Dictionary of capability flags
+            
+        Raises:
+            KeyError: If DBMS not registered
+        """
+        plugin = cls._plugins.get(name)
+        if plugin is None:
+            raise KeyError(
+                f"DBMS '{name}' not registered. "
+                f"Available: {list(cls._plugins.keys())}"
+            )
+        metadata = plugin.get_metadata()
+        # Try 'capabilities' first, fall back to 'features'
+        return metadata.get('capabilities', metadata.get('features', {}))
+    
+    @classmethod
+    def get_cli_choices(cls) -> List[str]:
+        """
+        Get list of DBMS names suitable for CLI --dbms argument choices.
+        
+        Returns:
+            List of registered plugin names
+        """
+        return cls.list_plugins()
+    
+    @classmethod
+    def get_plan_collator(cls, name: str) -> Optional[Any]:
+        """
+        Get plan collator for a DBMS (if provided by plugin).
+        
+        Args:
+            name: Plugin name
+            
+        Returns:
+            Collator function or None
+        """
+        plugin = cls._plugins.get(name)
+        if plugin is None:
+            return None
+        return plugin.get_plan_collator()
+    
+    @classmethod
+    def get_feature_aliases(cls, name: str) -> Optional[Dict[str, str]]:
+        """
+        Get feature aliases for a DBMS (if provided by plugin).
+        
+        Args:
+            name: Plugin name
+            
+        Returns:
+            Feature alias dictionary or None
+        """
+        plugin = cls._plugins.get(name)
+        if plugin is None:
+            return None
+        return plugin.get_feature_aliases()
+    
+    @classmethod
+    def get_plan_adapter(cls, name: str) -> Optional[Any]:
+        """
+        Get plan adapter for a DBMS (if provided by plugin).
+        
+        Used by legacy models (QPPNet, QueryFormer) that need DBMS-specific
+        plan format conversions.
+        
+        Args:
+            name: Plugin name
+            
+        Returns:
+            Adapter function or None
+        """
+        plugin = cls._plugins.get(name)
+        if plugin is None:
+            return None
+        return plugin.get_plan_adapter()
 
 
 # Forward declarations for type hints

@@ -546,7 +546,7 @@ def main():
         feature_statistics=feature_statistics,
         column_statistics=column_statistics,
         plan_featurization=model_config.featurization,
-        use_trino=True  # ★ Enable Trino adapter
+        dbms_name='trino'  # ★ Registry-aware (changed from use_trino=True)
     )
     
     # Create dataloaders

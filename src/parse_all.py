@@ -18,7 +18,7 @@ def compute(input):
     else:
         parse_join_conds = True
 
-    no_plans, stats = parse_run(source, target, DatabaseSystem.POSTGRES, min_query_ms=0, cap_queries=cap_queries,
+    no_plans, stats = parse_run(source, target, 'postgres', min_query_ms=0, cap_queries=cap_queries,
                                 parse_baseline=parse_baseline, parse_join_conds=parse_join_conds, max_query_ms=max_query_ms,
                                 include_zero_card=include_zero_card, explain_only=explain_only)
     return dict(dataset=d, workload=wl, no_plans=no_plans, **stats)
@@ -38,8 +38,8 @@ if __name__ == '__main__':
     parser.add_argument('--cap_queries', default=5000, type=int)
     parser.add_argument('--include_zero_card', action='store_true')
     parser.add_argument('--explain_only', action='store_true')
-    parser.add_argument('--database', default=DatabaseSystem.POSTGRES, type=DatabaseSystem,
-                        choices=list(DatabaseSystem))
+    parser.add_argument('--database', default='postgres', type=str,
+                        choices=['postgres', 'trino'])
     args = parser.parse_args()
 
     cap_queries = args.cap_queries

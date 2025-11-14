@@ -126,23 +126,38 @@ def create_datasets(workload_run_paths,
     return label_norm, train_dataset, val_dataset, database_statistics
 
 
-def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict = None, column_statistics: dict = None, plan_featurization=None, use_trino=False, debug_print=False):
+def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict = None, column_statistics: dict = None, plan_featurization=None, use_trino=False, dbms_name: str = None, debug_print=False):
+    """
+    QPPNet plan collator - now supports all DBMS via registry.
+    
+    Args:
+        use_trino: Legacy parameter (deprecated, use dbms_name instead)
+        dbms_name: DBMS name (e.g., 'postgres', 'trino') - preferred
+    """
+    from core.plugins.registry import DBMSRegistry
+    
     labels = []
     query_plans = []
 
+    # Convert legacy use_trino to dbms_name (backward compatibility)
+    if dbms_name is None:
+        dbms_name = 'trino' if use_trino else 'postgres'
+    
+    # Get plan adapter from registry (O(1) lookup, no if-elif!)
+    adapter = DBMSRegistry.get_plan_adapter(dbms_name)
+    
     # iterate over plans and create lists of edges and features per node
     sample_idxs = []
     errors = []
     for sample_idx, p in plans:
         try:
-            # Trinoの場合はアダプターで変換
-            if use_trino:
-                from models.qppnet.trino_adapter import adapt_trino_plan_to_qppnet
-                # pがTrinoPlanOperatorの場合、そのまま変換
-                plan_dict = adapt_trino_plan_to_qppnet(p)
+            # Convert plan to OperatorTree using adapter if available
+            if adapter is not None:
+                # Use plugin-provided adapter (e.g., Trino)
+                plan_dict = adapter(p)
                 query_plan: OperatorTree = operator_tree_from_json(plan_dict)
             else:
-                # PostgreSQLの場合は従来通り
+                # No adapter needed (e.g., PostgreSQL)
                 query_plan: OperatorTree = operator_tree_from_json(vars(p))
             
             # Debug: Print tree structure for first plan

@@ -72,6 +72,13 @@ class TrinoPlugin(DBMSPlugin):
         """
         return TrinoOperatorNormalizer()
     
+    def get_plan_adapter(self):
+        """
+        Returns plan adapter for QPPNet/QueryFormer compatibility.
+        """
+        from models.qppnet.trino_adapter import adapt_trino_plan_to_qppnet
+        return adapt_trino_plan_to_qppnet
+    
     def get_metadata(self):
         """
         Returns plugin metadata.

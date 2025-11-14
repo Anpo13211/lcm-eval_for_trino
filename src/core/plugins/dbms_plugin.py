@@ -104,6 +104,46 @@ class DBMSPlugin(ABC):
             'description': getattr(self, 'description', ''),
         }
     
+    def get_plan_collator(self) -> Optional[Any]:
+        """
+        Returns a plan collator function for training (optional).
+        
+        Plugins can override this to provide DBMS-specific collation logic.
+        If not provided, training code should fall back to unified_plan_collator.
+        
+        Returns:
+            Collator function or None
+        """
+        return None
+    
+    def get_feature_aliases(self) -> Optional[Dict[str, str]]:
+        """
+        Returns feature name aliases for this DBMS (optional).
+        
+        Maps DBMS-specific feature names to standardized names.
+        
+        Returns:
+            Dictionary mapping DBMS features to standard features, or None
+        """
+        return None
+    
+    def get_plan_adapter(self) -> Optional[Any]:
+        """
+        Returns a plan adapter function for legacy models (optional).
+        
+        Some models (e.g., QPPNet, QueryFormer) use model-specific plan formats.
+        Plugins can provide adapters to convert DBMS-specific plans to these formats.
+        
+        Returns:
+            Adapter function (plan → dict) or None
+            
+        Example:
+            def adapt_to_qppnet(plan):
+                # Convert Trino plan to QPPNet format
+                return {'node_type': ..., 'children': ...}
+        """
+        return None
+    
     def validate(self) -> bool:
         """
         Validates that the plugin is properly configured.

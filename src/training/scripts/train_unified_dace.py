@@ -374,7 +374,9 @@ def main():
     parser.add_argument('--train_files', type=str, required=True)
     parser.add_argument('--test_file', type=str, required=True)
     parser.add_argument('--schema', type=str, required=True)
-    parser.add_argument('--dbms', type=str, default='trino', choices=['trino', 'postgres', 'mysql'])
+    # Get available DBMS from registry
+    available_dbms = DBMSRegistry.get_cli_choices() if DBMSRegistry.list_plugins() else ['trino', 'postgres', 'mysql']
+    parser.add_argument('--dbms', type=str, default='trino', choices=available_dbms)
     parser.add_argument('--output_dir', type=str, default='models/unified_dace')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=32)

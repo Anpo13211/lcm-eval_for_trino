@@ -588,14 +588,14 @@ def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str,
     val_dataset = PlanDataset(train_plans[train_size:], list(range(train_size, len(train_plans))))
     test_dataset_obj = PlanDataset(test_plans, list(range(len(test_plans))))
     
-    # Create collate function
+    # Create collate function (now using dbms_name for registry-based adaptation)
     train_collate_fn = functools.partial(
         qppnet_collator,
         db_statistics={},
         feature_statistics=feature_statistics,
         column_statistics=column_statistics,
         plan_featurization=featurization,
-        use_trino=True,
+        dbms_name='trino',  # Changed from use_trino=True (registry-aware)
         debug_print=args.verbose
     )
     

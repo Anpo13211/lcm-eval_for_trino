@@ -85,7 +85,8 @@ if __name__ == '__main__':
     # load databases
     # also load imdb full dataset to be able to run the full job benchmark
     for dataset in ext_database_list:
-        for database in [DatabaseSystem.POSTGRES]:
+        # Use string instead of enum (supports plugin registry)
+        for database in ['postgres']:  # Changed from [DatabaseSystem.POSTGRES]
             curr_data_dir = os.path.join(args.data_dir, dataset.data_folder)
             print(f"Loading database {dataset.db_name} from {curr_data_dir}")
             load_database(curr_data_dir, dataset.source_dataset, database, dataset.db_name, args.database_conn_dict,

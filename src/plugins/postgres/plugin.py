@@ -119,6 +119,15 @@ class PostgreSQLPlugin(DBMSPlugin):
         """
         return PostgreSQLOperatorNormalizer()
     
+    def get_plan_adapter(self):
+        """
+        Returns plan adapter for QPPNet/QueryFormer compatibility.
+        
+        PostgreSQL plans are already in the expected format,
+        so we return None (no adaptation needed).
+        """
+        return None  # No adaptation needed for PostgreSQL
+    
     def get_metadata(self):
         """
         Returns plugin metadata.
