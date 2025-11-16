@@ -55,10 +55,14 @@ class DACELora(nn.Module):
                 outputs = []
                 for seq, mask in zip(x, attn_mask):
                     mask = mask.to(device=seq.device)
+                    if mask.dtype is not torch.bool:
+                        mask = mask.to(dtype=torch.bool)
                     outputs.append(self.transformer_encoder(seq.unsqueeze(0), mask=mask))
                 out = torch.cat(outputs, dim=0)
             else:
                 attn_mask = attn_mask.to(device=x.device)
+                if attn_mask.dtype is not torch.bool:
+                    attn_mask = attn_mask.to(dtype=torch.bool)
                 out = self.transformer_encoder(x, mask=attn_mask)
         else:
             out = self.transformer_encoder(x)
