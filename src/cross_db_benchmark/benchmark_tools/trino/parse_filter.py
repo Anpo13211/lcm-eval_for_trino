@@ -205,8 +205,11 @@ class TrinoPredicateNode(AbstractPredicateNode):
                 text_stripped = self.text.strip()
                 
                 # より包括的な意味のない子ノードのチェック
-                # これらは親ノードで処理されるため、警告を抑制
-                
+                # これらは親ノードで処理されるため、警告は抑制
+                looks_like_alias_cast = re.match(
+                    r'^[A-Za-z0-9_."]+\s+AS\s+[A-Za-z0-9_()]+$', text_stripped, re.IGNORECASE
+                )
+
                 # AND演算子と$構文の組み合わせをチェック（例: ' AND  AND $like AND $like'）
                 # AND、空白、$構文のみを含む場合は警告を抑制
                 cleaned_text = text_stripped.replace('$like', '').replace('$not', '').replace('like', '').replace('not', '')
@@ -220,6 +223,8 @@ class TrinoPredicateNode(AbstractPredicateNode):
                     text_stripped.isdigit() or
                     # 型キャストの型指定部分のみ（例: "char(3)"）
                     re.match(r'^[a-z]+\([^)]+\)$', text_stripped, re.IGNORECASE) or
+                    # 列名＋AS＋型名（CAST/別名の一部）
+                    looks_like_alias_cast or
                     # Trino特有の構文（$like, $notなどで始まる、または含む）
                     text_stripped.startswith('$') or
                     '$' in text_stripped or

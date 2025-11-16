@@ -14,6 +14,7 @@ Usage:
 import sys
 import os
 import warnings
+from itertools import chain
 from pathlib import Path
 
 # Suppress warnings
@@ -38,7 +39,10 @@ from datetime import datetime
 import core.init_plugins
 
 from core.plugins.registry import DBMSRegistry
-from models.flat.unified_flat_feature_extractor import extract_batch_features_unified
+from models.flat.unified_flat_feature_extractor import (
+    extract_batch_features_unified,
+    build_operator_vocab,
+)
 from training.training.metrics import QError, RMSE
 
 
@@ -166,6 +170,13 @@ def run_leave_one_out(
     # Step 1: Load all plans once
     all_dataset_plans = load_all_plans_once(data_dir, dbms_name, max_plans_per_dataset)
     
+    flat_operator_vocab = build_operator_vocab(
+        plans=chain.from_iterable(all_dataset_plans.values()),
+        dbms_name=dbms_name
+    )
+    feature_config = {'flat_vector_operator_vocab': flat_operator_vocab}
+    print(f"Detected {len(flat_operator_vocab)} operator slots (including fallback bucket).")
+    
     # Step 2: Extract features for all plans (one-time operation)
     print("🔧 Extracting features from all plans (one-time operation)")
     print("="*80)
@@ -175,7 +186,7 @@ def run_leave_one_out(
     
     for dataset_name, plans in all_dataset_plans.items():
         print(f"  Extracting features for {dataset_name}...")
-        X = extract_batch_features_unified(plans, dbms_name, {})
+        X = extract_batch_features_unified(plans, dbms_name, feature_config)
         y = np.array([p.plan_runtime / 1000 for p in plans])  # Convert to seconds
         
         all_features[dataset_name] = X

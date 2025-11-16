@@ -32,7 +32,7 @@ def recursively_convert_plan_unified(
     dim_word_hash: int = 1000,
     word_embeddings = None,
     dim_bitmaps: int = 1000,
-    max_filter_number: int = 5,
+    max_filter_number: int = 20,
     histogram_bin_size: int = 10
 ) -> TreeNode:
     """

@@ -31,7 +31,10 @@ import core.init_plugins
 
 from core.plugins.registry import DBMSRegistry
 from core.statistics.schema import StandardizedStatistics
-from models.flat.unified_flat_feature_extractor import extract_batch_features_unified
+from models.flat.unified_flat_feature_extractor import (
+    extract_batch_features_unified,
+    build_operator_vocab,
+)
 from training.training.metrics import QError, RMSE, MAPE
 
 
@@ -80,12 +83,16 @@ def run_training(
     print(f"✓ Train: {len(train_plans)}, Test: {len(test_plans)}")
     print()
     
+    # Build operator vocabulary from all observed plans
+    flat_operator_vocab = build_operator_vocab(train_plans + test_plans, dbms_name)
+    feature_config = {'flat_vector_operator_vocab': flat_operator_vocab}
+    
     # Extract features
     print("🔧 Extracting features")
-    X_train = extract_batch_features_unified(train_plans, dbms_name, {})
+    X_train = extract_batch_features_unified(train_plans, dbms_name, feature_config)
     y_train = np.array([p.plan_runtime / 1000 for p in train_plans])  # Convert to sec
     
-    X_test = extract_batch_features_unified(test_plans, dbms_name, {})
+    X_test = extract_batch_features_unified(test_plans, dbms_name, feature_config)
     y_test = np.array([p.plan_runtime / 1000 for p in test_plans])
     
     print(f"✓ Features: {X_train.shape}")
