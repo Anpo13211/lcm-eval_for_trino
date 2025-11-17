@@ -2,9 +2,11 @@ version: '3.8'
 
 services:
   trino-lcm:
-    build: .
+    build:
+      context: ..
+      dockerfile: Docker-env/Dockerfile
     volumes:
-      - .:/app
+      - ..:/app
       - ../explain_analyze_results:/app/explain_analyze_results
     working_dir: /app
     environment:
@@ -14,4 +16,6 @@ services:
       - NODE03={}
       - NODE04={}
       - NODE05={}
-    command: python src/trino_lcm/scripts/test_docker_status.py
+    tty: true
+    stdin_open: true
+    command: bash

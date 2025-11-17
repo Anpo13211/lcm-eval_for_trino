@@ -20,7 +20,7 @@ set -e  # エラーで停止
 PROJECT_ROOT="/home/anpo13211/lcm-eval-copy"
 DATA_DIR="/home/anpo13211/lcm-eval-copy/explain_analyze_results"
 STATISTICS_DIR="/home/anpo13211/zero-shot_datasets"
-OUTPUT_DIR="$PROJECT_ROOT/models"
+OUTPUT_DIR="$PROJECT_ROOT/model_results"
 LOGS_DIR="$PROJECT_ROOT/logs"
 
 # ログディレクトリ作成
@@ -31,14 +31,14 @@ DEVICE="cpu"
 
 # 共通パラメータ
 EPOCHS=100
-BATCH_SIZE=32
+BATCH_SIZE=512
 HIDDEN_DIM=256
 LEARNING_RATE=0.001
 DBMS="trino"
 
 # モデル固有のハイパーパラメータ（元論文の実装に合わせる）
 DACE_HIDDEN_DIM=128
-QUERYFORMER_BATCH_SIZE=16
+QUERYFORMER_BATCH_SIZE=512
 QPPNET_EPOCHS=50
 QPPNET_HIDDEN_DIM=128
 

@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements
-COPY requirements/requirements_docker.txt /app/requirements.txt
+# Copy requirements (use main repo requirements)
+COPY requirements/requirements.txt /app/requirements.txt
 
 # Install Python dependencies (excluding DGL for now)
 RUN pip install --no-cache-dir -r requirements.txt
