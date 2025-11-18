@@ -4,11 +4,19 @@ Unified QueryFormer Training Script with Leave-One-Out Cross-Validation
 This script performs leave-one-out cross-validation across 20 datasets.
 For each iteration, it trains on 19 datasets and tests on 1 held-out dataset.
 
-Usage:
+Single-GPU Usage:
     python -m training.scripts.train_unified_queryformer_loo \
         --dbms trino \
-        --data_dir /Users/an/query_engine/explain_analyze_results \
-        --output_dir models/queryformer_loo
+        --data_dir /path/to/explain_analyze_results \
+        --output_dir models/queryformer_loo \
+        --device cuda:0
+
+Multi-GPU Usage (e.g., 7 GPUs):
+    torchrun --nproc_per_node=7 -m training.scripts.train_unified_queryformer_loo \
+        --dbms trino \
+        --data_dir /path/to/explain_analyze_results \
+        --output_dir models/queryformer_loo \
+        --device cuda
 """
 
 import sys
@@ -31,8 +39,12 @@ if str(src_dir) not in sys.path:
 import argparse
 import functools
 import torch
+import torch.distributed as dist
 import json
+import copy
 from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 import numpy as np
 from datetime import datetime
@@ -482,36 +494,70 @@ def run_leave_one_out(
     learning_rate: float = 0.001,
     device: str = "cuda:0",
     max_plans_per_dataset: int = None,
-    statistics_dir: str = 'datasets_statistics'
+    statistics_dir: str = 'datasets_statistics',
+    patience: int = 10
 ):
     """
     Run leave-one-out cross-validation across all datasets.
+    Supports multi-GPU training via DistributedDataParallel when launched with torchrun.
     """
+    # Initialize distributed training if requested
+    is_distributed = dist.is_available() and dist.is_initialized()
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = dist.get_world_size() if is_distributed else 1
+    
+    # Resolve device
+    if device.lower() == "cpu":
+        device_obj = torch.device("cpu")
+        is_distributed = False
+    else:
+        if is_distributed:
+            device_obj = torch.device(f"cuda:{local_rank}")
+            torch.cuda.set_device(device_obj)
+        else:
+            device_obj = torch.device(device)
+    
+    is_main_process = (not is_distributed) or (local_rank == 0)
+    
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print("="*80)
-    print(f"LEAVE-ONE-OUT CROSS-VALIDATION - QueryFormer ({dbms_name.upper()})")
-    print("="*80)
-    print(f"Total Datasets: {len(DATASET_NAMES)}")
-    print(f"Device: {device}")
-    print(f"Epochs per fold: {epochs}")
-    print(f"Batch size: {batch_size}")
-    print("="*80)
-    print()
+    if is_main_process:
+        print("="*80)
+        print(f"LEAVE-ONE-OUT CROSS-VALIDATION - QueryFormer ({dbms_name.upper()})")
+        print("="*80)
+        print(f"Total Datasets: {len(DATASET_NAMES)}")
+        print(f"Device: {device_obj}")
+        if is_distributed:
+            print(f"Distributed: {world_size} GPUs (local_rank={local_rank})")
+        print(f"Epochs per fold: {epochs}")
+        print(f"Batch size: {batch_size} (per GPU)" if is_distributed else f"Batch size: {batch_size}")
+        print("="*80)
+        print()
     
-    # Step 1: Load all plans once
-    all_dataset_plans = load_all_plans_once(data_dir, dbms_name, max_plans_per_dataset)
+    # Step 1: Load all plans once (only rank 0 prints)
+    if is_main_process:
+        all_dataset_plans = load_all_plans_once(data_dir, dbms_name, max_plans_per_dataset)
+    else:
+        # Non-main processes still need to load data
+        all_dataset_plans = load_all_plans_once(data_dir, dbms_name, max_plans_per_dataset)
     
     # Step 2: Load all table samples once (for sample_vec generation)
-    all_table_samples = load_all_table_samples_once(no_samples=1000)
+    if is_main_process:
+        all_table_samples = load_all_table_samples_once(no_samples=1000)
+    else:
+        all_table_samples = load_all_table_samples_once(no_samples=1000)
     
     # Step 3: Load all statistics once
-    all_statistics = load_all_statistics_once(dbms_name, statistics_dir)
+    if is_main_process:
+        all_statistics = load_all_statistics_once(dbms_name, statistics_dir)
+    else:
+        all_statistics = load_all_statistics_once(dbms_name, statistics_dir)
     
     # Step 4: Augment sample_vec for all plans (one-time operation)
     if dbms_name == "trino" and all_table_samples:
-        print("🔧 Augmenting sample_vec for all plans (one-time operation)")
-        print("="*80)
+        if is_main_process:
+            print("🔧 Augmenting sample_vec for all plans (one-time operation)")
+            print("="*80)
         from models.workload_driven.preprocessing.sample_vectors_trino import augment_sample
         
         for dataset_name, plans in all_dataset_plans.items():
@@ -613,24 +659,41 @@ def run_leave_one_out(
             dim_bitmaps=1000
         )
         
+        train_dataset = UnifiedPlanDataset([train_plans[i] for i in train_split.indices])
+        val_dataset = UnifiedPlanDataset([train_plans[i] for i in val_split.indices])
+        test_dataset = UnifiedPlanDataset(test_plans)
+        
+        # Use DistributedSampler if multi-GPU
+        if is_distributed:
+            train_sampler = DistributedSampler(train_dataset, shuffle=True)
+            val_sampler = DistributedSampler(val_dataset, shuffle=False)
+            test_sampler = DistributedSampler(test_dataset, shuffle=False)
+        else:
+            train_sampler = None
+            val_sampler = None
+            test_sampler = None
+        
         train_loader = DataLoader(
-            UnifiedPlanDataset([train_plans[i] for i in train_split.indices]),
+            train_dataset,
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=(train_sampler is None),
+            sampler=train_sampler,
             collate_fn=collate_fn
         )
         
         val_loader = DataLoader(
-            UnifiedPlanDataset([train_plans[i] for i in val_split.indices]),
+            val_dataset,
             batch_size=batch_size,
             shuffle=False,
+            sampler=val_sampler,
             collate_fn=collate_fn
         )
         
         test_loader = DataLoader(
-            UnifiedPlanDataset(test_plans),
+            test_dataset,
             batch_size=batch_size,
             shuffle=False,
+            sampler=test_sampler,
             collate_fn=collate_fn
         )
         
@@ -645,18 +708,28 @@ def run_leave_one_out(
         )
         
         model = QueryFormer(config, input_dims, feature_statistics, label_norm=None)
-        model = model.to(device)
+        model = model.to(device_obj)
+        
+        # Wrap with DDP if distributed
+        if is_distributed:
+            model = DDP(model, device_ids=[local_rank], output_device=local_rank)
         
         # Training
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
         
         # Use model's internal loss function (QLoss by default, matching PostgreSQL version)
-        criterion = model.loss_fxn
+        criterion = model.module.loss_fxn if is_distributed else model.loss_fxn
         
         best_val_loss = float('inf')
+        patience_counter = 0
+        best_model_state = None
         
-        print(f"\n  🚀 Training...")
+        if is_main_process:
+            print(f"\n  🚀 Training...")
         for epoch in range(epochs):
+            # Set epoch for distributed sampler
+            if is_distributed:
+                train_sampler.set_epoch(epoch)
             # Train
             model.train()
             total_loss = 0.0
@@ -664,8 +737,8 @@ def run_leave_one_out(
             for batch, labels, _ in train_loader:
                 optimizer.zero_grad()
                 
-                batch = tuple(b.to(device) for b in batch)
-                labels = labels.to(device)
+                batch = tuple(b.to(device_obj) for b in batch)
+                labels = labels.to(device_obj)
                 
                 predictions = model(batch).squeeze(-1)
                 loss = criterion(predictions, labels)
@@ -682,8 +755,8 @@ def run_leave_one_out(
             
             with torch.no_grad():
                 for batch, labels, _ in val_loader:
-                    batch = tuple(b.to(device) for b in batch)
-                    labels = labels.to(device)
+                    batch = tuple(b.to(device_obj) for b in batch)
+                    labels = labels.to(device_obj)
                     
                     predictions = model(batch)
                     predictions_squeezed = predictions.squeeze(-1)
@@ -692,62 +765,86 @@ def run_leave_one_out(
             
             avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0.0
             
-            if epoch % 10 == 0 or epoch == epochs - 1:
+            if is_main_process and (epoch % 10 == 0 or epoch == epochs - 1):
                 print(f"    Epoch {epoch+1}/{epochs}: train={avg_train_loss:.4f}, val={avg_val_loss:.4f}")
             
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
+                patience_counter = 0
+                target_model = model.module if is_distributed else model
+                best_model_state = copy.deepcopy(target_model.state_dict())
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    if is_main_process:
+                        print(f"    ⏹ Early stopping triggered at epoch {epoch+1}")
+                    break
         
-        # Evaluate on test set
-        test_metrics = evaluate_test(model, test_loader, device, test_dataset_name)
+        if best_model_state is not None:
+            target_model = model.module if is_distributed else model
+            target_model.load_state_dict(best_model_state)
         
-        if test_metrics:
-            all_results.append(test_metrics)
+        # Evaluate on test set (only rank 0 in distributed mode)
+        if is_main_process:
+            eval_model = model.module if is_distributed else model
+            test_metrics = evaluate_test(eval_model, test_loader, device_obj, test_dataset_name)
+            
+            if test_metrics:
+                all_results.append(test_metrics)
+        
+        # Synchronize all ranks before moving to next fold
+        if is_distributed:
+            dist.barrier()
         
         # Clean up model
         del model
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
-    # Save all results
-    results_file = output_dir / f"{dbms_name}_leave_one_out_results.json"
+    # Save all results (only rank 0)
+    if is_main_process:
+        results_file = output_dir / f"{dbms_name}_leave_one_out_results.json"
+        
+        # Calculate average metrics
+        if all_results:
+            avg_metrics = {
+                'avg_rmse': np.mean([r['rmse'] for r in all_results if r['rmse'] is not None]),
+                'avg_median_q_error': np.mean([r['median_q_error'] for r in all_results if r['median_q_error'] is not None]),
+                'avg_mean_q_error': np.mean([r['mean_q_error'] for r in all_results if r['mean_q_error'] is not None]),
+                'avg_p95_q_error': np.mean([r['p95_q_error'] for r in all_results if r['p95_q_error'] is not None]),
+                'avg_p99_q_error': np.mean([r['p99_q_error'] for r in all_results if r['p99_q_error'] is not None]),
+            }
+        
+            results_summary = {
+                'timestamp': datetime.now().isoformat(),
+                'dbms': dbms_name,
+                'num_folds': len(all_results),
+                'epochs_per_fold': epochs,
+                'batch_size': batch_size,
+                'hidden_dim': hidden_dim,
+                'learning_rate': learning_rate,
+                'average_metrics': avg_metrics,
+                'per_dataset_results': all_results
+            }
+            
+            with open(results_file, 'w') as f:
+                json.dump(results_summary, f, indent=2)
+            
+            print("\n" + "="*80)
+            print("📊 LEAVE-ONE-OUT CROSS-VALIDATION SUMMARY")
+            print("="*80)
+            print(f"Completed folds: {len(all_results)}/{len(DATASET_NAMES)}")
+            print(f"\nAverage Metrics:")
+            print(f"  RMSE: {avg_metrics['avg_rmse']:.4f}")
+            print(f"  Median Q-Error: {avg_metrics['avg_median_q_error']:.4f}")
+            print(f"  Mean Q-Error: {avg_metrics['avg_mean_q_error']:.4f}")
+            print(f"  P95 Q-Error: {avg_metrics['avg_p95_q_error']:.4f}")
+            print(f"  P99 Q-Error: {avg_metrics['avg_p99_q_error']:.4f}")
+            print(f"\n✓ Results saved to: {results_file}")
+            print("="*80)
     
-    # Calculate average metrics
-    if all_results:
-        avg_metrics = {
-            'avg_rmse': np.mean([r['rmse'] for r in all_results if r['rmse'] is not None]),
-            'avg_median_q_error': np.mean([r['median_q_error'] for r in all_results if r['median_q_error'] is not None]),
-            'avg_mean_q_error': np.mean([r['mean_q_error'] for r in all_results if r['mean_q_error'] is not None]),
-            'avg_p95_q_error': np.mean([r['p95_q_error'] for r in all_results if r['p95_q_error'] is not None]),
-            'avg_p99_q_error': np.mean([r['p99_q_error'] for r in all_results if r['p99_q_error'] is not None]),
-        }
-        
-        results_summary = {
-            'timestamp': datetime.now().isoformat(),
-            'dbms': dbms_name,
-            'num_folds': len(all_results),
-            'epochs_per_fold': epochs,
-            'batch_size': batch_size,
-            'hidden_dim': hidden_dim,
-            'learning_rate': learning_rate,
-            'average_metrics': avg_metrics,
-            'per_dataset_results': all_results
-        }
-        
-        with open(results_file, 'w') as f:
-            json.dump(results_summary, f, indent=2)
-        
-        print("\n" + "="*80)
-        print("📊 LEAVE-ONE-OUT CROSS-VALIDATION SUMMARY")
-        print("="*80)
-        print(f"Completed folds: {len(all_results)}/{len(DATASET_NAMES)}")
-        print(f"\nAverage Metrics:")
-        print(f"  RMSE: {avg_metrics['avg_rmse']:.4f}")
-        print(f"  Median Q-Error: {avg_metrics['avg_median_q_error']:.4f}")
-        print(f"  Mean Q-Error: {avg_metrics['avg_mean_q_error']:.4f}")
-        print(f"  P95 Q-Error: {avg_metrics['avg_p95_q_error']:.4f}")
-        print(f"  P99 Q-Error: {avg_metrics['avg_p99_q_error']:.4f}")
-        print(f"\n✓ Results saved to: {results_file}")
-        print("="*80)
+    # Synchronize before exiting
+    if is_distributed:
+        dist.barrier()
     
     return 0
 
@@ -773,15 +870,21 @@ def main():
     parser.add_argument('--lr', type=float, default=0.001,
                        help='Learning rate')
     parser.add_argument('--device', type=str, default='cpu',
-                       help='Device (cuda:0, cpu, etc.)')
+                       help='Device: cpu, cuda:0, or cuda for multi-GPU (use with torchrun)')
     parser.add_argument('--max_plans', type=int, default=10000,
                        help='Maximum plans per dataset')
     parser.add_argument('--statistics_dir', type=str, default='datasets_statistics',
                        help='Statistics directory')
+    parser.add_argument('--patience', type=int, default=10,
+                       help='Early stopping patience (epochs)')
     
     args = parser.parse_args()
     
-    return run_leave_one_out(
+    # Initialize distributed backend if torchrun was used
+    if 'LOCAL_RANK' in os.environ:
+        dist.init_process_group(backend='nccl' if args.device.startswith('cuda') else 'gloo')
+    
+    result = run_leave_one_out(
         dbms_name=args.dbms,
         data_dir=Path(args.data_dir),
         output_dir=Path(args.output_dir),
@@ -791,8 +894,15 @@ def main():
         learning_rate=args.lr,
         device=args.device,
         max_plans_per_dataset=args.max_plans,
-        statistics_dir=args.statistics_dir
+        statistics_dir=args.statistics_dir,
+        patience=args.patience
     )
+    
+    # Clean up distributed
+    if dist.is_initialized():
+        dist.destroy_process_group()
+    
+    return result
 
 
 if __name__ == "__main__":

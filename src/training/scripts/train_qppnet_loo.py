@@ -4,12 +4,21 @@ QPPNet Training Script with Leave-One-Out Cross-Validation for Trino
 This script performs leave-one-out cross-validation across 20 datasets.
 For each iteration, it trains on 19 datasets and tests on 1 held-out dataset.
 
-Usage:
+Single-GPU Usage:
     python -m training.scripts.train_qppnet_loo \
-        --data_dir /Users/an/query_engine/explain_analyze_results \
+        --data_dir /path/to/explain_analyze_results \
         --output_dir models/qppnet_loo \
         --epochs 50 \
-        --batch_size 32
+        --batch_size 32 \
+        --device cuda:0
+
+Multi-GPU Usage (e.g., 7 GPUs):
+    torchrun --nproc_per_node=7 -m training.scripts.train_qppnet_loo \
+        --data_dir /path/to/explain_analyze_results \
+        --output_dir models/qppnet_loo \
+        --epochs 50 \
+        --batch_size 32 \
+        --device cuda
 """
 
 import sys
@@ -31,8 +40,11 @@ if str(src_dir) not in sys.path:
 import argparse
 import functools
 import torch
+import torch.distributed as dist
 import json
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 import numpy as np
 from datetime import datetime
@@ -454,6 +466,8 @@ def train_epoch(model, train_loader, optimizer, device, epoch, verbose=False):
     model.train()
     total_loss = 0
     num_batches = 0
+    target_model = model.module if hasattr(model, "module") else model
+    criterion = target_model.loss_fxn
 
     pbar = tqdm(train_loader, desc=f"Epoch {epoch}", leave=False) if verbose else None
     iterator = pbar if pbar is not None else train_loader
@@ -470,10 +484,10 @@ def train_epoch(model, train_loader, optimizer, device, epoch, verbose=False):
 
         optimizer.zero_grad()
         predictions = model(query_plans)
-        loss = model.loss_fxn(predictions, labels)
+        loss = criterion(predictions, labels)
 
         loss.backward()
-        model.backward()  # Step operator-level optimizers
+        target_model.backward()  # Step operator-level optimizers
         optimizer.step()
 
         total_loss += loss.item()
@@ -527,10 +541,24 @@ def evaluate(model, val_loader, device):
 def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str, 
                       all_plans_data: dict, args, results_file):
     """Train and evaluate a single fold."""
-    print("\n" + "="*80)
-    print(f"FOLD {fold_idx + 1}/20: Testing on {test_dataset}")
-    print(f"Training on: {', '.join(train_datasets)}")
-    print("="*80)
+    is_distributed = dist.is_available() and dist.is_initialized()
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if args.device.lower() == 'cpu':
+        device_obj = torch.device('cpu')
+        is_distributed = False
+    else:
+        if is_distributed:
+            device_obj = torch.device(f'cuda:{local_rank}')
+            torch.cuda.set_device(device_obj)
+        else:
+            device_obj = torch.device(args.device)
+    is_main_process = (not is_distributed) or (local_rank == 0)
+
+    if is_main_process:
+        print("\n" + "="*80)
+        print(f"FOLD {fold_idx + 1}/20: Testing on {test_dataset}")
+        print(f"Training on: {', '.join(train_datasets)}")
+        print("="*80)
     
     # Create output directory for this fold
     fold_dir = Path(args.output_dir) / f"fold_{fold_idx:02d}_{test_dataset}"
@@ -547,12 +575,14 @@ def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str,
     # Get test plans
     test_plans, test_runtimes = all_plans_data[test_dataset]
     
-    print(f"\n📊 Data summary:")
-    print(f"  Training queries: {len(train_plans)}")
-    print(f"  Test queries: {len(test_plans)}")
+    if is_main_process:
+        print(f"\n📊 Data summary:")
+        print(f"  Training queries: {len(train_plans)}")
+        print(f"  Test queries: {len(test_plans)}")
     
     if not train_plans or not test_plans:
-        print("⚠️  Insufficient data for this fold, skipping...")
+        if is_main_process:
+            print("⚠️  Insufficient data for this fold, skipping...")
         return None
     
     # Load column statistics (use first training dataset as representative)
@@ -565,22 +595,25 @@ def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str,
     from training.featurizations import QPPNetFeaturization
     featurization = QPPNetFeaturization()
     
-    print("\n📊 Collecting feature statistics from training plans...")
+    if is_main_process:
+        print("\n📊 Collecting feature statistics from training plans...")
     feature_statistics = collect_feature_statistics_from_plans(train_plans, featurization)
     
     # Save statistics (without scalers for JSON serialization)
     stats_to_save = {k: {kk: vv for kk, vv in v.items() if kk != 'scaler'} 
                      for k, v in feature_statistics.items()}
-    with open(fold_dir / 'feature_statistics.json', 'w') as f:
-        json.dump(stats_to_save, f, indent=2)
-    
-    with open(fold_dir / 'column_statistics.json', 'w') as f:
-        json.dump(column_statistics, f, indent=2, default=str)
+    if is_main_process:
+        with open(fold_dir / 'feature_statistics.json', 'w') as f:
+            json.dump(stats_to_save, f, indent=2)
+        
+        with open(fold_dir / 'column_statistics.json', 'w') as f:
+            json.dump(column_statistics, f, indent=2, default=str)
     
     # Add scalers after saving
     feature_statistics = add_scalers_to_feature_statistics(feature_statistics)
     
-    print(f"  Collected statistics for {len(feature_statistics)} features")
+    if is_main_process:
+        print(f"  Collected statistics for {len(feature_statistics)} features")
     
     # Create datasets
     train_size = int(0.9 * len(train_plans))
@@ -599,17 +632,41 @@ def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str,
         debug_print=args.verbose
     )
     
-    # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
-                              shuffle=True, num_workers=0, collate_fn=train_collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
-                            shuffle=False, num_workers=0, collate_fn=train_collate_fn)
-    test_loader = DataLoader(test_dataset_obj, batch_size=args.batch_size,
-                             shuffle=False, num_workers=0, collate_fn=train_collate_fn)
+    if is_distributed:
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)
+        test_sampler = DistributedSampler(test_dataset_obj, shuffle=False)
+    else:
+        train_sampler = val_sampler = test_sampler = None
+    
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        num_workers=0,
+        collate_fn=train_collate_fn
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        sampler=val_sampler,
+        num_workers=0,
+        collate_fn=train_collate_fn
+    )
+    test_loader = DataLoader(
+        test_dataset_obj,
+        batch_size=args.batch_size,
+        shuffle=False,
+        sampler=test_sampler,
+        num_workers=0,
+        collate_fn=train_collate_fn
+    )
     
     # Create model config
     model_config = QPPNetModelConfig(
-        device=args.device,
+        device=str(device_obj),
         hidden_dim_plan=args.hidden_dim,
         batch_size=args.batch_size,
         featurization=featurization,
@@ -618,7 +675,8 @@ def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str,
     )
     
     # Initialize model
-    print("\n🤖 Initializing QPPNet model...")
+    if is_main_process:
+        print("\n🤖 Initializing QPPNet model...")
     dummy_workload_runs = WorkloadRuns(
         train_workload_runs=[],
         test_workload_runs=[]
@@ -629,76 +687,94 @@ def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str,
         workload_runs=dummy_workload_runs,
         feature_statistics=feature_statistics,
         use_global_loss=True
-    ).to(args.device)
+    ).to(device_obj)
+    
+    if is_distributed:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
     
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {total_params:,}")
+    if is_main_process:
+        print(f"Model parameters: {total_params:,}")
     
     # Initialize optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     
     # Training loop
-    print("\n🏋️  Starting training...")
+    if is_main_process:
+        print("\n🏋️  Starting training...")
     best_val_qerror = float('inf')
     patience = 10
     patience_counter = 0
     
     for epoch in range(1, args.epochs + 1):
-        train_loss = train_epoch(model, train_loader, optimizer, args.device, epoch, verbose=args.verbose)
-        val_median_qerror, val_mean_qerror, val_p95_qerror = evaluate(model, val_loader, args.device)
+        if is_distributed and train_sampler is not None:
+            train_sampler.set_epoch(epoch)
         
-        print(f"Epoch {epoch}/{args.epochs} - "
-              f"Train Loss: {train_loss:.4f}, "
-              f"Val Median Q-Error: {val_median_qerror:.2f}")
+        train_loss = train_epoch(model, train_loader, optimizer, device_obj, epoch, verbose=args.verbose)
+        val_median_qerror, val_mean_qerror, val_p95_qerror = evaluate(model, val_loader, device_obj)
+        
+        if is_main_process:
+            print(f"Epoch {epoch}/{args.epochs} - "
+                  f"Train Loss: {train_loss:.4f}, "
+                  f"Val Median Q-Error: {val_median_qerror:.2f}")
         
         # Save best model
         if val_median_qerror < best_val_qerror:
             best_val_qerror = val_median_qerror
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_qerror': val_median_qerror,
-            }, fold_dir / 'best_model.pt')
-            print(f"  💾 Saved best model (Q-Error: {val_median_qerror:.2f})")
+            if is_main_process:
+                model_to_save = model.module if is_distributed else model
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model_to_save.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'val_qerror': val_median_qerror,
+                }, fold_dir / 'best_model.pt')
+                print(f"  💾 Saved best model (Q-Error: {val_median_qerror:.2f})")
             patience_counter = 0
         else:
             patience_counter += 1
         
         # Early stopping
         if patience_counter >= patience:
-            print(f"Early stopping triggered after {epoch} epochs")
+            if is_main_process:
+                print(f"Early stopping triggered after {epoch} epochs")
             break
     
     # Load best model and evaluate on test set
-    print("\n📊 Evaluating on test set...")
-    checkpoint = torch.load(fold_dir / 'best_model.pt')
-    model.load_state_dict(checkpoint['model_state_dict'])
+    fold_result = None
+    if is_main_process:
+        print("\n📊 Evaluating on test set...")
+        checkpoint = torch.load(fold_dir / 'best_model.pt', map_location=device_obj)
+        model_to_use = model.module if is_distributed else model
+        model_to_use.load_state_dict(checkpoint['model_state_dict'])
+        
+        test_median_qerror, test_mean_qerror, test_p95_qerror = evaluate(model_to_use, test_loader, device_obj)
+        
+        print(f"\n✅ Test Results:")
+        print(f"  Median Q-Error: {test_median_qerror:.2f}")
+        print(f"  Mean Q-Error: {test_mean_qerror:.2f}")
+        print(f"  95th Percentile Q-Error: {test_p95_qerror:.2f}")
+        
+        # Save fold results
+        fold_result = {
+            'fold': fold_idx,
+            'test_dataset': test_dataset,
+            'train_datasets': train_datasets,
+            'num_train_queries': len(train_plans),
+            'num_test_queries': len(test_plans),
+            'best_epoch': checkpoint['epoch'],
+            'val_median_qerror': float(best_val_qerror),
+            'test_median_qerror': float(test_median_qerror),
+            'test_mean_qerror': float(test_mean_qerror),
+            'test_p95_qerror': float(test_p95_qerror),
+        }
+        
+        # Append to results file
+        with open(results_file, 'a') as f:
+            f.write(json.dumps(fold_result) + '\n')
     
-    test_median_qerror, test_mean_qerror, test_p95_qerror = evaluate(model, test_loader, args.device)
-    
-    print(f"\n✅ Test Results:")
-    print(f"  Median Q-Error: {test_median_qerror:.2f}")
-    print(f"  Mean Q-Error: {test_mean_qerror:.2f}")
-    print(f"  95th Percentile Q-Error: {test_p95_qerror:.2f}")
-    
-    # Save fold results
-    fold_result = {
-        'fold': fold_idx,
-        'test_dataset': test_dataset,
-        'train_datasets': train_datasets,
-        'num_train_queries': len(train_plans),
-        'num_test_queries': len(test_plans),
-        'best_epoch': checkpoint['epoch'],
-        'val_median_qerror': float(best_val_qerror),
-        'test_median_qerror': float(test_median_qerror),
-        'test_mean_qerror': float(test_mean_qerror),
-        'test_p95_qerror': float(test_p95_qerror),
-    }
-    
-    # Append to results file
-    with open(results_file, 'a') as f:
-        f.write(json.dumps(fold_result) + '\n')
+    if is_distributed:
+        dist.barrier()
     
     return fold_result
 
@@ -706,15 +782,22 @@ def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str,
 def main():
     args = parse_args()
     
-    print("="*80)
-    print("QPPNet Leave-One-Out Cross-Validation")
-    print("="*80)
-    print(f"Output directory: {args.output_dir}")
-    print(f"Epochs: {args.epochs}")
-    print(f"Batch size: {args.batch_size}")
-    print(f"Device: {args.device}")
-    print("="*80)
-    print()
+    if 'LOCAL_RANK' in os.environ:
+        dist.init_process_group(backend='nccl' if args.device.startswith('cuda') else 'gloo')
+    is_distributed = dist.is_initialized()
+    local_rank = int(os.environ.get("LOCAL_RANK", 0)) if is_distributed else 0
+    is_main_process = (not is_distributed) or (local_rank == 0)
+    
+    if is_main_process:
+        print("="*80)
+        print("QPPNet Leave-One-Out Cross-Validation")
+        print("="*80)
+        print(f"Output directory: {args.output_dir}")
+        print(f"Epochs: {args.epochs}")
+        print(f"Batch size: {args.batch_size}")
+        print(f"Device: {args.device}")
+        print("="*80)
+        print()
     
     # Create output directory
     output_dir = Path(args.output_dir)
@@ -749,7 +832,7 @@ def main():
             continue
     
     # Compute overall statistics
-    if all_results:
+    if is_main_process and all_results:
         print("\n" + "="*80)
         print("OVERALL RESULTS")
         print("="*80)
@@ -776,6 +859,9 @@ def main():
             json.dump(summary, f, indent=2)
         
         print(f"\n✅ Results saved to {output_dir}")
+    
+    if is_distributed:
+        dist.destroy_process_group()
 
 
 if __name__ == '__main__':

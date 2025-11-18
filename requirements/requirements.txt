@@ -3,7 +3,7 @@ psycopg2-binary
 trino
 tqdm
 scikit-learn
-numpy
+numpy<2.0
 torchvision
 pydantic
 dotenv
@@ -35,7 +35,7 @@ loralib==0.1.2
 pytorch_lightning==2.0.9
 torchdata==0.6.1
 torch==2.0.1
-https://data.dgl.ai/wheels/torch-2.3/cu121/dgl-2.4.0%2Bcu121-cp312-cp312-manylinux1_x86_64.whl
+# https://data.dgl.ai/wheels/torch-2.3/cu121/dgl-2.4.0%2Bcu121-cp312-cp312-manylinux1_x86_64.whl
 ray
 torch_tb_profiler
 tensorflow

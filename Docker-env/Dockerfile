@@ -1,30 +1,29 @@
-# Trino LCM Evaluation Environment
-FROM python:3.9-slim
+# Trino LCM Evaluation Environment (GPU ready for H100)
+FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set working directory
 WORKDIR /app
 
-# Copy requirements (use main repo requirements)
+# Copy original requirements
 COPY requirements/requirements.txt /app/requirements.txt
 
-# Install Python dependencies (excluding DGL for now)
-RUN pip install --no-cache-dir -r requirements.txt
+# torch / lightning 系はベースイメージのものを使うので除外した requirements を作る
+RUN grep -vE '^(torch|torchvision|torchdata|pytorch_lightning|lightning)' requirements.txt \
+    > requirements-no-torch.txt
 
-# Install DGL (CPU version for ARM64 compatibility)
-RUN pip install dgl -f https://data.dgl.ai/wheels/repo.html
+# Install Python deps (GPU 対応 PyTorch は元から入っているので触らない)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-no-torch.txt
+
+# Install DGL for PyTorch 2.3 + CUDA 12.1
+RUN pip install --no-cache-dir \
+    dgl \
+    -f https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html
 
 # Copy source code
 COPY . /app/
 
-# Set Python path
-ENV PYTHONPATH=/app/src
+# Env
+ENV PYTHONPATH=/app/src \
+    DGLBACKEND=pytorch
 
-# Default command
 CMD ["python", "src/trino_lcm/scripts/test_docker_status.py"]

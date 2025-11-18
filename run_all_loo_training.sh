@@ -26,8 +26,35 @@ LOGS_DIR="$PROJECT_ROOT/logs"
 # ログディレクトリ作成
 mkdir -p "$LOGS_DIR"
 
-# デバイス設定（GPUがある場合は cuda:0、なければ cpu）
-DEVICE="cpu"
+# デバイス設定
+#   DEVICE_MODE: cpu | cuda | cuda_multi
+#   CUDA_DEVICE: 単一GPU指定 (DEVICE_MODE=cuda の場合)
+#   NUM_GPUS:    torchrun で使用するGPU数 (DEVICE_MODE=cuda_multi の場合)
+DEVICE_MODE="cuda_multi"
+CUDA_DEVICE="cuda:0"
+NUM_GPUS=7
+PATIENCE=20
+
+if [ "$DEVICE_MODE" = "cuda_multi" ]; then
+    LAUNCH_CMD="torchrun --standalone --nproc_per_node=$NUM_GPUS --tee 3"
+    DEVICE_ARG="--device cuda"
+    DEVICE_DESC="CUDA multi-GPU (torchrun, nproc=$NUM_GPUS)"
+elif [ "$DEVICE_MODE" = "cuda" ]; then
+    LAUNCH_CMD="python"
+    DEVICE_ARG="--device $CUDA_DEVICE"
+    DEVICE_DESC="CUDA single GPU ($CUDA_DEVICE)"
+else
+    DEVICE_MODE="cpu"
+    LAUNCH_CMD="python"
+    DEVICE_ARG="--device cpu"
+    DEVICE_DESC="CPU"
+fi
+
+# NCCL / torchrun watchdog対策（ハング時の強制停止を防ぐ）
+export NCCL_BLOCKING_WAIT=1
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+export NCCL_WATCHDOG_TIMEOUT=7200000
+export TORCH_DISTRIBUTED_TIMEOUT=7200
 
 # 共通パラメータ
 EPOCHS=100
@@ -49,7 +76,7 @@ echo "Project Root: $PROJECT_ROOT"
 echo "Data Directory: $DATA_DIR"
 echo "Statistics Directory: $STATISTICS_DIR"
 echo "Output Directory: $OUTPUT_DIR"
-echo "Device: $DEVICE"
+echo "Device Mode: $DEVICE_DESC"
 echo ""
 echo "Common Hyperparameters:"
 echo "  Epochs: $EPOCHS"
@@ -95,16 +122,17 @@ run_dace() {
     echo
     
     cd "$PROJECT_ROOT/src"
-    python -m training.scripts.train_unified_dace_loo \
-        --data_dir "$DATA_DIR" \
-        --output_dir "$OUTPUT_DIR/dace_loo" \
-        --dbms "$DBMS" \
-        --epochs "$EPOCHS" \
-        --batch_size "$BATCH_SIZE" \
-        --hidden_dim "$DACE_HIDDEN_DIM" \
+    eval "$LAUNCH_CMD -m training.scripts.train_unified_dace_loo \
+        --data_dir \"$DATA_DIR\" \
+        --output_dir \"$OUTPUT_DIR/dace_loo\" \
+        --dbms \"$DBMS\" \
+        --epochs \"$EPOCHS\" \
+        --batch_size \"$BATCH_SIZE\" \
+        --hidden_dim \"$DACE_HIDDEN_DIM\" \
         --node_length 22 \
-        --lr "$LEARNING_RATE" \
-        --device "$DEVICE"
+        --lr \"$LEARNING_RATE\" \
+        --patience \"$PATIENCE\" \
+        $DEVICE_ARG"
     
     echo
     echo "✅ DACE completed: $(date)"
@@ -119,16 +147,17 @@ run_queryformer() {
     echo
     
     cd "$PROJECT_ROOT/src"
-    python -m training.scripts.train_unified_queryformer_loo \
-        --data_dir "$DATA_DIR" \
-        --output_dir "$OUTPUT_DIR/queryformer_loo" \
-        --dbms "$DBMS" \
-        --epochs "$EPOCHS" \
-        --batch_size "$QUERYFORMER_BATCH_SIZE" \
-        --hidden_dim "$HIDDEN_DIM" \
-        --lr "$LEARNING_RATE" \
-        --device "$DEVICE" \
-        --statistics_dir "$STATISTICS_DIR"
+    eval "$LAUNCH_CMD -m training.scripts.train_unified_queryformer_loo \
+        --data_dir \"$DATA_DIR\" \
+        --output_dir \"$OUTPUT_DIR/queryformer_loo\" \
+        --dbms \"$DBMS\" \
+        --epochs \"$EPOCHS\" \
+        --batch_size \"$QUERYFORMER_BATCH_SIZE\" \
+        --hidden_dim \"$HIDDEN_DIM\" \
+        --lr \"$LEARNING_RATE\" \
+        --statistics_dir \"$STATISTICS_DIR\" \
+        --patience \"$PATIENCE\" \
+        $DEVICE_ARG"
     
     echo
     echo "✅ QueryFormer completed: $(date)"
@@ -143,15 +172,15 @@ run_qppnet() {
     echo
     
     cd "$PROJECT_ROOT/src"
-    python -m training.scripts.train_qppnet_loo \
-        --data_dir "$DATA_DIR" \
-        --output_dir "$OUTPUT_DIR/qppnet_loo" \
-        --epochs "$QPPNET_EPOCHS" \
-        --batch_size "$BATCH_SIZE" \
-        --hidden_dim "$QPPNET_HIDDEN_DIM" \
-        --lr "$LEARNING_RATE" \
-        --device "$DEVICE" \
-        --statistics_dir "$STATISTICS_DIR"
+    eval "$LAUNCH_CMD -m training.scripts.train_qppnet_loo \
+        --data_dir \"$DATA_DIR\" \
+        --output_dir \"$OUTPUT_DIR/qppnet_loo\" \
+        --epochs \"$QPPNET_EPOCHS\" \
+        --batch_size \"$BATCH_SIZE\" \
+        --hidden_dim \"$QPPNET_HIDDEN_DIM\" \
+        --lr \"$LEARNING_RATE\" \
+        --statistics_dir \"$STATISTICS_DIR\" \
+        $DEVICE_ARG"
     
     echo
     echo "✅ QPPNet completed: $(date)"
@@ -166,16 +195,17 @@ run_zeroshot() {
     echo
     
     cd "$PROJECT_ROOT/src"
-    python -m training.scripts.train_unified_zeroshot_loo \
-        --data_dir "$DATA_DIR" \
-        --output_dir "$OUTPUT_DIR/zeroshot_loo" \
-        --dbms "$DBMS" \
-        --epochs "$EPOCHS" \
-        --batch_size "$BATCH_SIZE" \
-        --hidden_dim "$HIDDEN_DIM" \
-        --lr "$LEARNING_RATE" \
-        --device "$DEVICE" \
-        --statistics_dir "$STATISTICS_DIR"
+    eval "$LAUNCH_CMD -m training.scripts.train_unified_zeroshot_loo \
+        --data_dir \"$DATA_DIR\" \
+        --output_dir \"$OUTPUT_DIR/zeroshot_loo\" \
+        --dbms \"$DBMS\" \
+        --epochs \"$EPOCHS\" \
+        --batch_size \"$BATCH_SIZE\" \
+        --hidden_dim \"$HIDDEN_DIM\" \
+        --lr \"$LEARNING_RATE\" \
+        --statistics_dir \"$STATISTICS_DIR\" \
+        --patience \"$PATIENCE\" \
+        $DEVICE_ARG"
     
     echo
     echo "✅ Zero-Shot completed: $(date)"
@@ -183,32 +213,31 @@ run_zeroshot() {
 }
 
 # メイン処理
+run_target() {
+    case "$1" in
+        flat) run_flat ;;
+        dace) run_dace ;;
+        queryformer) run_queryformer ;;
+        qppnet) run_qppnet ;;
+        zeroshot) run_zeroshot ;;
+        *)
+            echo "Unknown target: $1"
+            echo "Usage: $0 [flat|dace|queryformer|qppnet|zeroshot|...]"
+            exit 1
+            ;;
+    esac
+}
+
 if [ $# -eq 0 ]; then
-    # 引数なし: すべてのモデルを実行
     run_flat
     run_dace
     run_queryformer
     run_qppnet
-    run_zeroshot
-elif [ "$1" = "flat" ]; then
-    run_flat
-elif [ "$1" = "dace" ]; then
-    run_dace
-elif [ "$1" = "queryformer" ]; then
-    run_queryformer
-elif [ "$1" = "qppnet" ]; then
-    run_qppnet
-elif [ "$1" = "zeroshot" ]; then
     run_zeroshot
 else
-    echo "Usage: $0 [flat|dace|queryformer|qppnet|zeroshot]"
-    echo "  No argument: Run all models"
-    echo "  flat: Run Flat Vector only"
-    echo "  dace: Run DACE only"
-    echo "  queryformer: Run QueryFormer only"
-    echo "  qppnet: Run QPPNet only"
-    echo "  zeroshot: Run Zero-Shot only"
-    exit 1
+    for target in "$@"; do
+        run_target "$target"
+    done
 fi
 
 echo "================================================================================"
