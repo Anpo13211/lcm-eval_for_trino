@@ -33,10 +33,10 @@ mkdir -p "$LOGS_DIR"
 DEVICE_MODE="cuda_multi"
 CUDA_DEVICE="cuda:0"
 NUM_GPUS=7
-PATIENCE=10
+PATIENCE=20
 
 if [ "$DEVICE_MODE" = "cuda_multi" ]; then
-    LAUNCH_CMD="torchrun --standalone --nproc_per_node=$NUM_GPUS"
+    LAUNCH_CMD="torchrun --standalone --nproc_per_node=$NUM_GPUS --tee 3"
     DEVICE_ARG="--device cuda"
     DEVICE_DESC="CUDA multi-GPU (torchrun, nproc=$NUM_GPUS)"
 elif [ "$DEVICE_MODE" = "cuda" ]; then
@@ -49,6 +49,12 @@ else
     DEVICE_ARG="--device cpu"
     DEVICE_DESC="CPU"
 fi
+
+# NCCL / torchrun watchdog対策（ハング時の強制停止を防ぐ）
+export NCCL_BLOCKING_WAIT=1
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+export NCCL_WATCHDOG_TIMEOUT=7200000
+export TORCH_DISTRIBUTED_TIMEOUT=7200
 
 # 共通パラメータ
 EPOCHS=100
@@ -207,32 +213,31 @@ run_zeroshot() {
 }
 
 # メイン処理
+run_target() {
+    case "$1" in
+        flat) run_flat ;;
+        dace) run_dace ;;
+        queryformer) run_queryformer ;;
+        qppnet) run_qppnet ;;
+        zeroshot) run_zeroshot ;;
+        *)
+            echo "Unknown target: $1"
+            echo "Usage: $0 [flat|dace|queryformer|qppnet|zeroshot|...]"
+            exit 1
+            ;;
+    esac
+}
+
 if [ $# -eq 0 ]; then
-    # 引数なし: すべてのモデルを実行
     run_flat
     run_dace
     run_queryformer
     run_qppnet
-    run_zeroshot
-elif [ "$1" = "flat" ]; then
-    run_flat
-elif [ "$1" = "dace" ]; then
-    run_dace
-elif [ "$1" = "queryformer" ]; then
-    run_queryformer
-elif [ "$1" = "qppnet" ]; then
-    run_qppnet
-elif [ "$1" = "zeroshot" ]; then
     run_zeroshot
 else
-    echo "Usage: $0 [flat|dace|queryformer|qppnet|zeroshot]"
-    echo "  No argument: Run all models"
-    echo "  flat: Run Flat Vector only"
-    echo "  dace: Run DACE only"
-    echo "  queryformer: Run QueryFormer only"
-    echo "  qppnet: Run QPPNet only"
-    echo "  zeroshot: Run Zero-Shot only"
-    exit 1
+    for target in "$@"; do
+        run_target "$target"
+    done
 fi
 
 echo "================================================================================"
