@@ -185,8 +185,8 @@ class QPPNet(nn.Module):
         # Predicted time is assumed to be the first column
         predicted_operator_time = pred_vector[0].clone().reshape(1)
 
-        # We apply a lower bound of predictions to avoid nans, as otherwise runtime can be 0 and q-error infinite.
-        predicted_operator_time = torch.max(predicted_operator_time, torch.tensor(0.1).to(self.device))
+        # Add a tiny positive offset (keeps gradients non-zero while preventing q-error inf)
+        predicted_operator_time = predicted_operator_time + 1e-7
 
         # 演算子レベルのloss計算（グローバルlossモードでは実行しない）
         if not self.use_global_loss and label is not None:

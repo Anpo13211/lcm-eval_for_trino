@@ -59,6 +59,7 @@ from models.qppnet.qppnet_dataloader import qppnet_collator
 from classes.classes import QPPNetModelConfig
 from classes.workload_runs import WorkloadRuns
 from training.training.metrics import QError, RMSE
+from training.training.utils import recursive_to
 from sklearn.preprocessing import RobustScaler
 from core.plugins.registry import DBMSRegistry
 
@@ -480,6 +481,7 @@ def train_epoch(model, train_loader, optimizer, device, epoch, verbose=False):
         if not query_plans:
             continue
 
+        recursive_to(query_plans, device)
         labels = torch.tensor(labels, dtype=torch.float32, device=device)
 
         optimizer.zero_grad()
@@ -518,6 +520,7 @@ def evaluate(model, val_loader, device):
             if not query_plans:
                 continue
 
+            recursive_to(query_plans, device)
             predictions = model(query_plans)
 
             all_predictions.extend(predictions.detach().cpu().numpy())
