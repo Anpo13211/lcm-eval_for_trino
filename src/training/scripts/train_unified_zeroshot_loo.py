@@ -496,7 +496,8 @@ def run_leave_one_out(
     learning_rate: float = 0.001,
     device: str = "cuda:0",
     max_plans_per_dataset: int = None,
-    statistics_dir: str = 'datasets_statistics'
+    statistics_dir: str = 'datasets_statistics',
+    patience: int = 10
 ):
     """
     Run leave-one-out cross-validation across all datasets.

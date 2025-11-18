@@ -90,7 +90,7 @@ def load_table_samples_for_dataset(schema_name: str, no_samples: int = 1000):
     # Try zero-shot-data location
     data_dirs = [
         f'/Users/an/query_engine/lakehouse/zero-shot_datasets/{schema_name}',
-        f'../zero-shot-data/datasets/{schema_name}',
+        f'../zero-shot_datasets/{schema_name}',
         f'data/{schema_name}'
     ]
     
@@ -712,7 +712,7 @@ def run_leave_one_out(
         
         # Wrap with DDP if distributed
         if is_distributed:
-            model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+            model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
         
         # Training
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
