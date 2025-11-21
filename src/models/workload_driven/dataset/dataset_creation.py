@@ -183,7 +183,34 @@ def create_baseline_dataloader(workload_runs: WorkloadRuns,
                            num_workers=model_config.num_workers,
                            pin_memory=data_loader_options.pin_memory)
 
-    column_statistics = load_json(column_statistics, namespace=False)
+    # column_statisticsの読み込み
+    # Trino統計を優先的に使用（環境変数で制御可能）
+    import os
+    from cross_db_benchmark.benchmark_tools.utils import load_column_statistics as load_col_stats
+    
+    prefer_trino = os.getenv('PREFER_TRINO_STATS', 'true').lower() in ('true', '1', 'yes')
+    
+    # column_statisticsがPathの場合、データセット名を抽出
+    if isinstance(column_statistics, (Path, str)):
+        column_statistics_path = Path(column_statistics)
+        # パスからデータセット名を抽出（例: ./cross_db_benchmark/datasets/accidents/column_statistics.json -> accidents）
+        parts = column_statistics_path.parts
+        if 'datasets' in parts:
+            dataset_idx = parts.index('datasets')
+            if dataset_idx + 1 < len(parts):
+                dataset_name = parts[dataset_idx + 1]
+                print(f"📊 Loading column statistics for dataset: {dataset_name} (prefer_trino={prefer_trino})")
+                column_statistics = load_col_stats(dataset_name, namespace=False, prefer_trino=prefer_trino)
+            else:
+                # フォールバック: 通常のload_jsonを使用
+                column_statistics = load_json(column_statistics_path, namespace=False)
+        else:
+            # フォールバック: 通常のload_jsonを使用
+            column_statistics = load_json(column_statistics_path, namespace=False)
+    else:
+        # 既にdictの場合はそのまま使用
+        pass
+    
     word_embeddings = KeyedVectors.load(str(word_embeddings), mmap='r')
     dim_word_emdb = word_embeddings.vector_size
     dim_word_hash = dim_word_emdb
