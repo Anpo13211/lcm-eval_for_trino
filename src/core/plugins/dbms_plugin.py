@@ -8,8 +8,10 @@ Each DBMS implementation provides:
 """
 
 from abc import ABC, abstractmethod
-from typing import Type, Dict, Any, Optional
+from typing import Type, Dict, Any, Optional, Set
 from dataclasses import dataclass
+
+from core.capabilities import Capability
 
 
 @dataclass
@@ -188,6 +190,15 @@ class DBMSPlugin(ABC):
             print(f"Plugin validation failed for {self.name}: {e}")
             return False
 
+    def get_capabilities(self) -> Set[Capability]:
+        """
+        Returns the set of capabilities supported by this DBMS plugin.
+        
+        Returns:
+            Set of Capability enums
+        """
+        return set()
+
 
 # Forward declarations for type hints
 # These will be properly imported from their respective modules
@@ -215,4 +226,3 @@ try:
     from core.operators.normalizer import OperatorNormalizer
 except ImportError:
     OperatorNormalizer = None
-

@@ -52,6 +52,7 @@ from models.zeroshot.zero_shot_model import ZeroShotModel
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
 from training.training.metrics import QError, RMSE
+from core.capabilities import check_capabilities
 
 
 class UnifiedPlanDataset(Dataset):
@@ -536,6 +537,29 @@ def run_training(
     print(f"Device: {device}")
     print("="*80)
     print()
+
+    # Capability check
+    try:
+        plugin = DBMSRegistry.get_plugin(dbms_name)
+        provided_caps = plugin.get_capabilities()
+        temp_config = ZeroShotModelConfig()
+        required_caps = temp_config.required_capabilities
+        missing_caps = check_capabilities(
+            required_caps,
+            provided_caps,
+            temp_config.name.NAME if temp_config.name else "zeroshot",
+            dbms_name
+        )
+
+        if missing_caps:
+            print("="*80)
+            print(f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by ZeroShot: {missing_caps}")
+            print("    Training may fail or produce suboptimal results.")
+            print("="*80)
+        else:
+            print(f"✓ Capability check passed: {dbms_name} provides all required capabilities for ZeroShot.\n")
+    except Exception as e:
+        print(f"⚠️  Capability check could not be completed: {e}")
     
     # Step 1: Load plans
     print("📂 Step 1: Loading plans")

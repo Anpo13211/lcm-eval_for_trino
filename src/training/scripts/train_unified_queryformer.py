@@ -46,6 +46,7 @@ from classes.classes import QueryFormerModelConfig
 from models.workload_driven.dataset.dataset_creation import PlanModelInputDims
 from training.training.metrics import QError, RMSE
 from types import SimpleNamespace
+from core.capabilities import check_capabilities
 
 
 class UnifiedPlanDataset(Dataset):
@@ -297,6 +298,29 @@ def run_training(
     print("="*80)
     print()
     
+    # Capability check
+    try:
+        plugin = DBMSRegistry.get_plugin(dbms_name)
+        provided_caps = plugin.get_capabilities()
+        temp_config = QueryFormerModelConfig()
+        required_caps = temp_config.required_capabilities
+        missing_caps = check_capabilities(
+            required_caps,
+            provided_caps,
+            temp_config.name.NAME if temp_config.name else "queryformer",
+            dbms_name
+        )
+
+        if missing_caps:
+            print("="*80)
+            print(f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by QueryFormer: {missing_caps}")
+            print("    Training may fail or produce suboptimal results.")
+            print("="*80)
+        else:
+            print(f"✓ Capability check passed: {dbms_name} provides all required capabilities for QueryFormer.\n")
+    except Exception as e:
+        print(f"⚠️  Capability check could not be completed: {e}")
+
     # Load table samples for sample_vec generation
     print("📂 Loading table samples")
     table_samples = load_table_samples(schema_name, no_samples=1000)

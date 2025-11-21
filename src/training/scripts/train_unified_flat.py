@@ -36,6 +36,8 @@ from models.flat.unified_flat_feature_extractor import (
     build_operator_vocab,
 )
 from training.training.metrics import QError, RMSE, MAPE
+from classes.classes import FlatModelConfig
+from core.capabilities import check_capabilities
 
 
 def load_plans_from_txt(file_paths: list, dbms_name: str, max_plans: int = None):
@@ -75,6 +77,29 @@ def run_training(
     print(f"Unified Flat Model Training for {dbms_name.upper()}")
     print("="*80)
     print()
+
+    # Capability check
+    try:
+        plugin = DBMSRegistry.get_plugin(dbms_name)
+        provided_caps = plugin.get_capabilities()
+        temp_config = FlatModelConfig()
+        required_caps = temp_config.required_capabilities
+        missing_caps = check_capabilities(
+            required_caps,
+            provided_caps,
+            temp_config.name.NAME if temp_config.name else "flat_vector",
+            dbms_name
+        )
+
+        if missing_caps:
+            print("="*80)
+            print(f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by Flat model: {missing_caps}")
+            print("    Training may fail or produce suboptimal results.")
+            print("="*80)
+        else:
+            print(f"✓ Capability check passed: {dbms_name} provides all required capabilities for Flat model.\n")
+    except Exception as e:
+        print(f"⚠️  Capability check could not be completed: {e}")
     
     # Load plans
     print("📂 Loading plans")

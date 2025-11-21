@@ -54,6 +54,7 @@ from classes.workload_runs import WorkloadRuns
 from training.featurizations import QPPNetFeaturization
 from training.preprocessing.feature_statistics import FeatureType
 from training.training.metrics import QError
+from core.capabilities import check_capabilities
 
 
 def parse_args():
@@ -450,6 +451,7 @@ def evaluate(model, val_loader, device):
 
 def main():
     args = parse_args()
+    dbms_name = 'trino'
     
     # Create output directory
     output_dir = Path(args.output_dir)
@@ -462,6 +464,29 @@ def main():
     print(f"Device: {args.device}")
     print(f"Output: {output_dir}")
     print()
+
+    # Capability check
+    try:
+        plugin = DBMSRegistry.get_plugin(dbms_name)
+        provided_caps = plugin.get_capabilities()
+        temp_config = QPPNetModelConfig()
+        required_caps = temp_config.required_capabilities
+        missing_caps = check_capabilities(
+            required_caps,
+            provided_caps,
+            temp_config.name.NAME if temp_config.name else "qppnet",
+            dbms_name
+        )
+
+        if missing_caps:
+            print("="*80)
+            print(f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by QPPNet: {missing_caps}")
+            print("    Training may fail or produce suboptimal results.")
+            print("="*80)
+        else:
+            print(f"✓ Capability check passed: {dbms_name} provides all required capabilities for QPPNet.\n")
+    except Exception as e:
+        print(f"⚠️  Capability check could not be completed: {e}")
     
     # Load training plans
     print("📂 Loading training plans...")

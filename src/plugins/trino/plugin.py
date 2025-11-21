@@ -134,6 +134,23 @@ class TrinoPlugin(DBMSPlugin):
             }
         }
 
+    def get_capabilities(self):
+        """
+        Returns Trino capabilities.
+        """
+        from core.capabilities import Capability
+        return {
+            Capability.COST_ESTIMATION,
+            Capability.CARDINALITY_ESTIMATION,
+            Capability.COLUMN_STATISTICS,
+            Capability.TABLE_STATISTICS,
+            Capability.PARALLEL_EXECUTION,
+            Capability.ACTUAL_RUNTIME,
+            Capability.PHYSICAL_PLAN,
+            Capability.DISTRIBUTED_PLAN,
+            # Note: Trino (via SHOW STATS) often lacks correlation and detailed histograms in standard output
+        }
+
 
 # Register plugin automatically when imported
 def register():

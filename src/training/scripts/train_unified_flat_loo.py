@@ -44,6 +44,8 @@ from models.flat.unified_flat_feature_extractor import (
     build_operator_vocab,
 )
 from training.training.metrics import QError, RMSE
+from classes.classes import FlatModelConfig
+from core.capabilities import check_capabilities
 
 
 # Dataset names (in order)
@@ -166,6 +168,29 @@ def run_leave_one_out(
     print(f"Boosting rounds: {num_boost_round}")
     print("="*80)
     print()
+
+    # Capability check
+    try:
+        plugin = DBMSRegistry.get_plugin(dbms_name)
+        provided_caps = plugin.get_capabilities()
+        temp_config = FlatModelConfig()
+        required_caps = temp_config.required_capabilities
+        missing_caps = check_capabilities(
+            required_caps,
+            provided_caps,
+            temp_config.name.NAME if temp_config.name else "flat_vector",
+            dbms_name
+        )
+
+        if missing_caps:
+            print("="*80)
+            print(f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by Flat model: {missing_caps}")
+            print("    Training may fail or produce suboptimal results.")
+            print("="*80)
+        else:
+            print(f"✓ Capability check passed: {dbms_name} provides all required capabilities for Flat model.\n")
+    except Exception as e:
+        print(f"⚠️  Capability check could not be completed: {e}")
     
     # Step 1: Load all plans once
     all_dataset_plans = load_all_plans_once(data_dir, dbms_name, max_plans_per_dataset)

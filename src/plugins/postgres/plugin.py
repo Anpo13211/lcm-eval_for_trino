@@ -184,6 +184,23 @@ class PostgreSQLPlugin(DBMSPlugin):
             }
         }
 
+    def get_capabilities(self):
+        """
+        Returns PostgreSQL capabilities.
+        """
+        from core.capabilities import Capability
+        return {
+            Capability.COST_ESTIMATION,
+            Capability.CARDINALITY_ESTIMATION,
+            Capability.COLUMN_STATISTICS,
+            Capability.TABLE_STATISTICS,
+            Capability.HISTOGRAM_STATS,
+            Capability.CORRELATION_STATS,
+            Capability.PARALLEL_EXECUTION,
+            Capability.ACTUAL_RUNTIME,
+            Capability.PHYSICAL_PLAN,
+        }
+
 
 # Register plugin automatically when imported
 # (This happens in application startup)

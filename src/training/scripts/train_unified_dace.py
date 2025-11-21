@@ -48,6 +48,7 @@ from training.unified_featurizations import UnifiedDACEFeaturization
 from models.dace.dace_model import DACELora
 from classes.classes import DACEModelConfig
 from training.training.metrics import QError, RMSE
+from core.capabilities import check_capabilities
 
 
 class UnifiedPlanDataset(Dataset):
@@ -191,6 +192,29 @@ def run_training(
     print(f"Schema: {schema_name}")
     print("="*80)
     print()
+
+    # Capability check
+    try:
+        plugin = DBMSRegistry.get_plugin(dbms_name)
+        provided_caps = plugin.get_capabilities()
+        temp_config = DACEModelConfig()
+        required_caps = temp_config.required_capabilities
+        missing_caps = check_capabilities(
+            required_caps,
+            provided_caps,
+            temp_config.name.NAME if temp_config.name else "dace",
+            dbms_name
+        )
+
+        if missing_caps:
+            print("="*80)
+            print(f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by DACE: {missing_caps}")
+            print("    Training may fail or produce suboptimal results.")
+            print("="*80)
+        else:
+            print(f"✓ Capability check passed: {dbms_name} provides all required capabilities for DACE.\n")
+    except Exception as e:
+        print(f"⚠️  Capability check could not be completed: {e}")
     
     # Load plans
     print("📂 Loading plans")

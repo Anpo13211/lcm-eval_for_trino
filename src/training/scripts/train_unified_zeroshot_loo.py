@@ -67,6 +67,7 @@ from models.zeroshot.zero_shot_model import ZeroShotModel
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
 from training.training.metrics import QError, RMSE
+from core.capabilities import Capability, check_capabilities
 
 
 # Dataset names (in order)
@@ -536,6 +537,33 @@ def run_leave_one_out(
         print("="*80)
         print()
     
+    # Check capabilities
+    try:
+        plugin = DBMSRegistry.get_plugin(dbms_name)
+        provided_caps = plugin.get_capabilities()
+        
+        # Instantiate config to get requirements
+        temp_config = ZeroShotModelConfig(database=dbms_name)
+        required_caps = temp_config.required_capabilities
+        
+        missing_caps = check_capabilities(required_caps, provided_caps, "ZeroShotModel", dbms_name)
+        
+        if missing_caps:
+            warning_msg = f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by ZeroShotModel: {missing_caps}"
+            if is_main_process:
+                print("="*80)
+                print(warning_msg)
+                print("Training may fail or produce suboptimal results.")
+                print("="*80)
+                print()
+        elif is_main_process:
+            print(f"✓ Capability check passed: {dbms_name} provides all {len(required_caps)} required capabilities.")
+            print()
+            
+    except Exception as e:
+        if is_main_process:
+            print(f"⚠️  Capability check failed: {e}")
+
     # Step 1: Load all plans once
     all_dataset_plans = load_all_plans_once(data_dir, dbms_name, max_plans_per_dataset)
     

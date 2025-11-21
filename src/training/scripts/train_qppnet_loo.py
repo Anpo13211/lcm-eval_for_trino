@@ -62,6 +62,7 @@ from training.training.metrics import QError, RMSE
 from training.training.utils import recursive_to
 from sklearn.preprocessing import RobustScaler
 from core.plugins.registry import DBMSRegistry
+from core.capabilities import check_capabilities
 
 # Dataset names (in order)
 DATASET_NAMES = [
@@ -784,6 +785,7 @@ def train_single_fold(fold_idx: int, train_datasets: list, test_dataset: str,
 
 def main():
     args = parse_args()
+    dbms_name = 'trino'
     
     if 'LOCAL_RANK' in os.environ:
         dist.init_process_group(backend='nccl' if args.device.startswith('cuda') else 'gloo')
@@ -801,6 +803,29 @@ def main():
         print(f"Device: {args.device}")
         print("="*80)
         print()
+
+        # Capability check
+        try:
+            plugin = DBMSRegistry.get_plugin(dbms_name)
+            provided_caps = plugin.get_capabilities()
+            temp_config = QPPNetModelConfig()
+            required_caps = temp_config.required_capabilities
+            missing_caps = check_capabilities(
+                required_caps,
+                provided_caps,
+                temp_config.name.NAME if temp_config.name else "qppnet",
+                dbms_name
+            )
+
+            if missing_caps:
+                print("="*80)
+                print(f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by QPPNet: {missing_caps}")
+                print("    Training may fail or produce suboptimal results.")
+                print("="*80)
+            else:
+                print(f"✓ Capability check passed: {dbms_name} provides all required capabilities for QPPNet.\n")
+        except Exception as e:
+            print(f"⚠️  Capability check could not be completed: {e}")
     
     # Create output directory
     output_dir = Path(args.output_dir)

@@ -1,11 +1,11 @@
 import ast
 import os
 from pathlib import Path
-from typing import List, Callable, Optional
+from typing import List, Callable, Optional, Set
 
 import attrs as attrs
 import seaborn as sns
-from attr import field
+from attr import field, Factory
 from dotenv import load_dotenv
 
 from models.query_former.dataloader import query_former_batch_to
@@ -20,6 +20,7 @@ from training.featurizations import Featurization, DACEFeaturization, QPPNetFeat
     FlatModelActCardFeaturization, QPPNetActCardsFeaturization, PostgresTrueCardDetail, DACEActCardFeaturization
 from training.unified_featurizations import UnifiedEstSystemCardDetail, UnifiedTrueCardDetail
 from core.graph.unified_collator import unified_plan_collator
+from core.capabilities import Capability
 
 
 class TrainingServers:
@@ -128,6 +129,7 @@ class ModelConfig:
     hyperparameter: Path = None
     column_statistics: bool = False
     word_embeddings: bool = False
+    required_capabilities: Set[Capability] = field(default=Factory(set))
 
     def color(self) -> str:
         return ColorManager.get_color(self.name)
@@ -206,6 +208,9 @@ class FlatModelConfig(TabularModelConfig):
     device: str = "cpu"
     input_format: str = InputFormats.parsed
     featurization: Featurization = FlatModelFeaturization
+    required_capabilities: Set[Capability] = field(default=Factory(lambda: {
+        Capability.CARDINALITY_ESTIMATION
+    }))
 
 
 @attrs.define(frozen=True, slots=False)
@@ -221,6 +226,7 @@ class ScaledPostgresModelConfig(TabularModelConfig):
     type: ModelType = ModelType.WL_AGNOSTIC
     device: str = "cpu"
     input_format: str = InputFormats.parsed
+
 
 @attrs.define(frozen=True, slots=False)
 class ScaledPostgresModelV16Config(ScaledPostgresModelConfig):
@@ -251,6 +257,11 @@ class QPPNetModelConfig(ModelConfig):
     device: str = "cpu"
     input_format: str = InputFormats.json
     column_statistics: bool = True
+    required_capabilities: Set[Capability] = field(default=Factory(lambda: {
+        Capability.PHYSICAL_PLAN,
+        Capability.COST_ESTIMATION,
+        Capability.CARDINALITY_ESTIMATION
+    }))
 
 
 @attrs.define(frozen=True, slots=False)
@@ -343,6 +354,11 @@ class ZeroShotModelConfig(ModelConfig):
     device: str = "cuda:0"
     input_format: str = InputFormats.parsed
     hyperparameter: Path = Path(f'conf/tuned_hyperparameters/tune_est_best_config.json')
+    required_capabilities: Set[Capability] = field(default=Factory(lambda: {
+        Capability.COST_ESTIMATION,
+        Capability.CARDINALITY_ESTIMATION,
+        Capability.PHYSICAL_PLAN
+    }))
 
 
 @attrs.define(frozen=True, slots=False)
@@ -350,6 +366,11 @@ class ZeroShotModelActCardConfig(ZeroShotModelConfig):
     name: Name = ModelName.ZEROSHOT_ACT_CARD
     featurization: Featurization = UnifiedTrueCardDetail
     hyperparameter: Path = Path(f'conf/tuned_hyperparameters/tune_best_config.json')
+    required_capabilities: Set[Capability] = field(default=Factory(lambda: {
+        Capability.ACTUAL_RUNTIME,
+        Capability.CARDINALITY_ESTIMATION,
+        Capability.PHYSICAL_PLAN
+    }))
 
 
 @attrs.define(frozen=True, slots=False)
@@ -365,6 +386,11 @@ class MSCNModelConfig(ModelConfig):
     input_format: str = InputFormats.baseline_parsed
     column_statistics: bool = True
     word_embeddings: bool = True
+    required_capabilities: Set[Capability] = field(default=Factory(lambda: {
+        Capability.TABLE_STATISTICS,
+        Capability.COLUMN_STATISTICS,
+        Capability.PHYSICAL_PLAN, # Uses plan structure (joins, aggregations)
+    }))
 
 
 @attrs.define(frozen=True, slots=False)
@@ -390,6 +416,11 @@ class DACEModelConfig(ModelConfig):
     input_format: str = InputFormats.parsed
     optimizer_class_name: str = "Adam"
     optimizer_kwargs: dict = dict(lr=1e-3)
+    required_capabilities: Set[Capability] = field(default=Factory(lambda: {
+        Capability.PHYSICAL_PLAN,
+        Capability.COST_ESTIMATION,
+        Capability.CARDINALITY_ESTIMATION
+    }))
 
 
 @attrs.define(frozen=True, slots=False)
@@ -430,6 +461,12 @@ class QueryFormerModelConfig(ModelConfig):
     batch_to_func: Callable = query_former_batch_to
     loss_class_name: str = "QLoss"  # Originally MSELoss
     optimizer_class_name: str = "AdamW"  # Originally Adam
+    required_capabilities: Set[Capability] = field(default=Factory(lambda: {
+        Capability.PHYSICAL_PLAN,
+        Capability.HISTOGRAM_STATS,
+        Capability.TABLE_STATISTICS,
+        Capability.COLUMN_STATISTICS
+    }))
 
 
 @attrs.define(frozen=True, slots=False)
