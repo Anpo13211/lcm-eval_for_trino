@@ -142,6 +142,32 @@ class DBMSPlugin(ABC):
         """
         return None
     
+    def run_workload(self, workload_path, db_name, database_conn_args, database_kwarg_dict, target_path, run_kwargs,
+                     repetitions_per_query, timeout_sec, mode, hints=None, with_indexes=False, cap_workload=None, 
+                     explain_only: bool = False, min_runtime=100):
+        """
+        Run a workload against the database.
+        
+        Plugins should implement this method to support benchmark execution.
+        
+        Args:
+            workload_path: Path to workload queries
+            db_name: Database name
+            database_conn_args: Connection arguments
+            database_kwarg_dict: Additional connection kwargs
+            target_path: Path to save results
+            run_kwargs: Run configuration
+            repetitions_per_query: Number of repetitions
+            timeout_sec: Timeout in seconds
+            mode: Execution mode
+            hints: Query hints (optional)
+            with_indexes: Whether indexes are used
+            cap_workload: Max number of queries
+            explain_only: If True, only run EXPLAIN
+            min_runtime: Minimum runtime to capture
+        """
+        raise NotImplementedError(f"run_workload not implemented for {self.name}")
+
     def validate(self) -> bool:
         """
         Validates that the plugin is properly configured.

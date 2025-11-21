@@ -86,6 +86,19 @@ class PostgreSQLPlugin(DBMSPlugin):
     version: str = "1.0.0"
     description: str = "PostgreSQL database system plugin"
     
+    def run_workload(self, workload_path, db_name, database_conn_args, database_kwarg_dict, target_path, run_kwargs,
+                     repetitions_per_query, timeout_sec, mode, hints=None, with_indexes=False, cap_workload=None, 
+                     explain_only: bool = False, min_runtime=100):
+        """
+        Run a workload against PostgreSQL.
+        """
+        from cross_db_benchmark.benchmark_tools.postgres.run_workload import run_pg_workload
+        from cross_db_benchmark.benchmark_tools.database import DatabaseSystem
+        
+        run_pg_workload(workload_path, DatabaseSystem.POSTGRES, db_name, database_conn_args, database_kwarg_dict, target_path,
+                        run_kwargs, repetitions_per_query, timeout_sec, random_hints=hints, with_indexes=with_indexes,
+                        cap_workload=cap_workload, min_runtime=min_runtime, mode=mode, explain_only=explain_only)
+
     def get_parser(self):
         """
         Returns PostgreSQL plan parser.
@@ -128,6 +141,32 @@ class PostgreSQLPlugin(DBMSPlugin):
         """
         return None  # No adaptation needed for PostgreSQL
     
+    def get_feature_aliases(self):
+        """
+        Returns feature aliases for PostgreSQL.
+        """
+        return {
+            "operator_type": "Node Type",
+            "estimated_cardinality": "Plan Rows",
+            "actual_cardinality": "Actual Rows",
+            "estimated_cost": "Total Cost",
+            "startup_cost": "Startup Cost",
+            "estimated_width": "Plan Width",
+            "workers_planned": "Workers Planned",
+            "workers_launched": "Workers Launched",
+            "actual_children_cardinality": "act_children_card",
+            "filter_operator": "operator",
+            "literal_feature": "literal_feature",
+            "avg_width": "avg_width",
+            "correlation": "correlation",
+            "data_type": "data_type",
+            "n_distinct": "n_distinct",
+            "null_frac": "null_frac",
+            "row_count": "reltuples",
+            "page_count": "relpages",
+            "aggregation": "aggregation",
+        }
+
     def get_metadata(self):
         """
         Returns plugin metadata.

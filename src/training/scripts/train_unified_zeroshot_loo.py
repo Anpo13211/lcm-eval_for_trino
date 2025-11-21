@@ -650,7 +650,8 @@ def run_leave_one_out(
             hidden_dim_plan=hidden_dim,
             hidden_dim_pred=hidden_dim,
             featurization=featurization,
-            batch_size=batch_size
+            batch_size=batch_size,
+            database=dbms_name
         )
         
         encoders = [

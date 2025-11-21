@@ -18,7 +18,7 @@ from training.batch_to_funcs import dace_batch_to, simple_batch_to, batch_to
 from training.featurizations import Featurization, DACEFeaturization, QPPNetFeaturization, \
     PostgresEstSystemCardDetail, DACEFeaturizationNoCosts, QPPNetNoCostsFeaturization, FlatModelFeaturization, \
     FlatModelActCardFeaturization, QPPNetActCardsFeaturization, PostgresTrueCardDetail, DACEActCardFeaturization
-from models.zeroshot.postgres_plan_batching import postgres_plan_collator
+from training.unified_featurizations import UnifiedEstSystemCardDetail, UnifiedTrueCardDetail
 from core.graph.unified_collator import unified_plan_collator
 
 
@@ -299,7 +299,7 @@ class TestSumModelConfig(E2EModelConfig):
 class ZeroShotModelConfig(ModelConfig):
     name: Name = ModelName.ZEROSHOT
     type: ModelType = ModelType.WL_AGNOSTIC
-    featurization: Featurization = PostgresEstSystemCardDetail
+    featurization: Featurization = UnifiedEstSystemCardDetail
     hidden_dim_plan: int = 256
     hidden_dim_pred: int = 256
     skip_train: bool = False
@@ -335,11 +335,10 @@ class ZeroShotModelConfig(ModelConfig):
     tree_layer_name: str = 'MscnConv'  # GATConv MscnConv
     # database: Can be DatabaseSystem enum OR string (e.g., 'postgres', 'trino')
     # For new code, prefer string to leverage plugin registry
-    database: DatabaseSystem = DatabaseSystem.POSTGRES
+    database: str = "postgres"
     batch_to_func: Callable = batch_to
     # collator_func: Now using unified_plan_collator (works for all DBMS)
-    # Legacy postgres_plan_collator still available for backward compatibility
-    collator_func: Callable = unified_plan_collator  # Changed from postgres_plan_collator
+    collator_func: Callable = unified_plan_collator
     execution_mode: ExecutionMode = ExecutionMode.RAW_OUTPUT
     device: str = "cuda:0"
     input_format: str = InputFormats.parsed
@@ -349,7 +348,7 @@ class ZeroShotModelConfig(ModelConfig):
 @attrs.define(frozen=True, slots=False)
 class ZeroShotModelActCardConfig(ZeroShotModelConfig):
     name: Name = ModelName.ZEROSHOT_ACT_CARD
-    featurization: Featurization = PostgresTrueCardDetail
+    featurization: Featurization = UnifiedTrueCardDetail
     hyperparameter: Path = Path(f'conf/tuned_hyperparameters/tune_best_config.json')
 
 

@@ -311,7 +311,7 @@ class UnifiedPlanConverter:
             Encoded numeric value
         """
         # Import here to avoid circular dependency
-        from models.zeroshot.postgres_plan_batching import encode
+        from core.features.encoding import encode
         
         try:
             # Call encode() with the feature name and full plan_params

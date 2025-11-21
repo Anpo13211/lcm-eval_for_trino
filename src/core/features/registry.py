@@ -19,11 +19,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="operator_type",
         feature_type=FeatureType.PLAN_OPERATOR,
-        dbms_aliases={
-            "postgres": "Node Type",
-            "trino": "op_name",
-            "mysql": "select_type",
-        },
+        dbms_aliases={},
         default_value="unknown",
         transformation=normalize_operator_name,
         description="Type of plan operator (e.g., SeqScan, HashJoin)"
@@ -32,11 +28,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="estimated_cardinality",
         feature_type=FeatureType.PLAN_CARDINALITY,
-        dbms_aliases={
-            "postgres": "Plan Rows",
-            "trino": "est_rows",
-            "mysql": "rows",
-        },
+        dbms_aliases={},
         default_value=1.0,
         transformation=to_positive_float,
         min_value=0.0,
@@ -46,11 +38,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="actual_cardinality",
         feature_type=FeatureType.PLAN_CARDINALITY,
-        dbms_aliases={
-            "postgres": "Actual Rows",
-            "trino": "act_rows",
-            "mysql": "rows",
-        },
+        dbms_aliases={},
         default_value=None,
         transformation=to_positive_float,
         min_value=0.0,
@@ -60,11 +48,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="estimated_cost",
         feature_type=FeatureType.PLAN_COST,
-        dbms_aliases={
-            "postgres": "Total Cost",
-            "trino": "est_cost",
-            "mysql": "cost",
-        },
+        dbms_aliases={},
         default_value=0.0,
         transformation=to_positive_float,
         min_value=0.0,
@@ -74,10 +58,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="startup_cost",
         feature_type=FeatureType.PLAN_COST,
-        dbms_aliases={
-            "postgres": "Startup Cost",
-            "trino": "startup_cost",
-        },
+        dbms_aliases={},
         default_value=0.0,
         transformation=to_positive_float,
         min_value=0.0,
@@ -87,10 +68,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="estimated_width",
         feature_type=FeatureType.PLAN_WIDTH,
-        dbms_aliases={
-            "postgres": "Plan Width",
-            "trino": "est_width",
-        },
+        dbms_aliases={},
         default_value=0,
         transformation=to_int,
         min_value=0,
@@ -100,10 +78,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="workers_planned",
         feature_type=FeatureType.PLAN_PARALLELISM,
-        dbms_aliases={
-            "postgres": "Workers Planned",
-            "trino": "workers_planned",
-        },
+        dbms_aliases={},
         default_value=0,
         transformation=to_int,
         min_value=0,
@@ -113,10 +88,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="workers_launched",
         feature_type=FeatureType.PLAN_PARALLELISM,
-        dbms_aliases={
-            "postgres": "Workers Launched",
-            "trino": "workers_launched",
-        },
+        dbms_aliases={},
         default_value=0,
         transformation=to_int,
         min_value=0,
@@ -127,10 +99,7 @@ PLAN_FEATURES = [
     FeatureMapping(
         logical_name="actual_children_cardinality",
         feature_type=FeatureType.PLAN_CARDINALITY,
-        dbms_aliases={
-            "postgres": "act_children_card",
-            "trino": "act_children_card",
-        },
+        dbms_aliases={},
         default_value=None,
         transformation=to_positive_float,
         description="Sum of actual cardinalities of child nodes"
@@ -146,10 +115,7 @@ FILTER_FEATURES = [
     FeatureMapping(
         logical_name="filter_operator",
         feature_type=FeatureType.FILTER_OPERATOR,
-        dbms_aliases={
-            "postgres": "operator",
-            "trino": "operator",
-        },
+        dbms_aliases={},
         default_value="=",
         description="Comparison operator (=, <, >, LIKE, etc.)"
     ),
@@ -157,10 +123,7 @@ FILTER_FEATURES = [
     FeatureMapping(
         logical_name="literal_feature",
         feature_type=FeatureType.FILTER_LITERAL,
-        dbms_aliases={
-            "postgres": "literal_feature",
-            "trino": "literal_feature",
-        },
+        dbms_aliases={},
         default_value=0.0,
         transformation=to_float,
         description="Encoded literal value in predicate"
@@ -176,10 +139,7 @@ COLUMN_FEATURES = [
     FeatureMapping(
         logical_name="avg_width",
         feature_type=FeatureType.COLUMN_STATISTICS,
-        dbms_aliases={
-            "postgres": "avg_width",
-            "trino": "avg_width",
-        },
+        dbms_aliases={},
         default_value=8,
         transformation=to_int,
         min_value=0,
@@ -189,10 +149,7 @@ COLUMN_FEATURES = [
     FeatureMapping(
         logical_name="correlation",
         feature_type=FeatureType.COLUMN_STATISTICS,
-        dbms_aliases={
-            "postgres": "correlation",
-            # Trino doesn't provide correlation
-        },
+        dbms_aliases={},
         default_value=0.0,
         transformation=to_float,
         min_value=-1.0,
@@ -203,10 +160,7 @@ COLUMN_FEATURES = [
     FeatureMapping(
         logical_name="data_type",
         feature_type=FeatureType.COLUMN_TYPE,
-        dbms_aliases={
-            "postgres": "data_type",
-            "trino": "data_type",
-        },
+        dbms_aliases={},
         default_value="unknown",
         description="Column data type"
     ),
@@ -214,10 +168,7 @@ COLUMN_FEATURES = [
     FeatureMapping(
         logical_name="n_distinct",
         feature_type=FeatureType.COLUMN_STATISTICS,
-        dbms_aliases={
-            "postgres": "n_distinct",
-            "trino": "distinct_count",
-        },
+        dbms_aliases={},
         default_value=1.0,
         transformation=to_positive_float,
         min_value=0.0,
@@ -227,10 +178,7 @@ COLUMN_FEATURES = [
     FeatureMapping(
         logical_name="null_frac",
         feature_type=FeatureType.COLUMN_STATISTICS,
-        dbms_aliases={
-            "postgres": "null_frac",
-            "trino": "null_fraction",
-        },
+        dbms_aliases={},
         default_value=0.0,
         transformation=to_float,
         min_value=0.0,
@@ -248,11 +196,7 @@ TABLE_FEATURES = [
     FeatureMapping(
         logical_name="row_count",
         feature_type=FeatureType.TABLE_STATISTICS,
-        dbms_aliases={
-            "postgres": "reltuples",
-            "trino": "row_count",
-            "mysql": "table_rows",
-        },
+        dbms_aliases={},
         default_value=0.0,
         transformation=to_positive_float,
         min_value=0.0,
@@ -262,10 +206,7 @@ TABLE_FEATURES = [
     FeatureMapping(
         logical_name="page_count",
         feature_type=FeatureType.TABLE_STATISTICS,
-        dbms_aliases={
-            "postgres": "relpages",
-            # Trino doesn't provide page counts
-        },
+        dbms_aliases={},
         default_value=0,
         transformation=to_int,
         min_value=0,
@@ -282,10 +223,7 @@ OUTPUT_COLUMN_FEATURES = [
     FeatureMapping(
         logical_name="aggregation",
         feature_type=FeatureType.OUTPUT_AGGREGATION,
-        dbms_aliases={
-            "postgres": "aggregation",
-            "trino": "aggregation",
-        },
+        dbms_aliases={},
         default_value="none",
         description="Aggregation function (sum, avg, count, etc.)"
     ),
@@ -402,5 +340,3 @@ def get_registered_dbms() -> list:
     for mapping in FEATURE_REGISTRY.values():
         all_dbms.update(mapping.dbms_aliases.keys())
     return sorted(all_dbms)
-
-

@@ -94,7 +94,8 @@ def unified_plan_collator(
     sample_idxs = []
     
     # Prepare robust encoder for numerical fields (from existing code)
-    _add_numerical_scalers(feature_statistics)
+    from core.features.encoding import add_numerical_scalers
+    add_numerical_scalers(feature_statistics)
     
     # Track global indices across all plans
     plan_offset = 0
@@ -275,27 +276,6 @@ def _ensure_standardized_statistics(
     
     # Fallback: return empty statistics
     return StandardizedStatistics()
-
-
-def _add_numerical_scalers(feature_statistics: dict):
-    """
-    Add numerical scalers to feature statistics (from existing code).
-    
-    This is copied from postgres_plan_batching.py for compatibility.
-    """
-    from sklearn.preprocessing import RobustScaler
-    from training.preprocessing.feature_statistics import FeatureType
-    
-    if feature_statistics is None:
-        return
-    
-    # Exactly the same as original implementation
-    for k, v in feature_statistics.items():
-        if v.get('type') == str(FeatureType.numeric):
-            scaler = RobustScaler()
-            scaler.center_ = v['center']
-            scaler.scale_ = v['scale']
-            feature_statistics[k]['scaler'] = scaler
 
 
 def _append_with_offset(
