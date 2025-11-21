@@ -70,9 +70,18 @@ class DBMSRegistry:
             if not plugin.validate():
                 raise RuntimeError(
                     f"Plugin '{plugin.name}' failed validation. "
-                    f"Ensure all required methods are implemented."
+                    f"Ensure all required methods (get_feature_aliases, get_capabilities) are implemented."
                 )
             
+            # Strict validation of return values
+            aliases = plugin.get_feature_aliases()
+            if not isinstance(aliases, dict):
+                raise RuntimeError(f"Plugin '{plugin.name}' get_feature_aliases() must return a dict, got {type(aliases)}")
+                
+            capabilities = plugin.get_capabilities()
+            if not isinstance(capabilities, set) or not capabilities:
+                raise RuntimeError(f"Plugin '{plugin.name}' get_capabilities() must return a non-empty set, got {capabilities}")
+
             cls._plugins[plugin.name] = plugin
             print(f"Registered DBMS plugin: {plugin.display_name} ({plugin.name})")
     

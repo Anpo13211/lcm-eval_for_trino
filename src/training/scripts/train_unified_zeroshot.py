@@ -52,7 +52,7 @@ from models.zeroshot.zero_shot_model import ZeroShotModel
 from classes.classes import ZeroShotModelConfig
 from training.preprocessing.feature_statistics import gather_feature_statistics, FeatureType
 from training.training.metrics import QError, RMSE
-from core.capabilities import check_capabilities
+from core.compatibility import check_model_compatibility
 
 
 class UnifiedPlanDataset(Dataset):
@@ -539,27 +539,9 @@ def run_training(
     print()
 
     # Capability check
-    try:
-        plugin = DBMSRegistry.get_plugin(dbms_name)
-        provided_caps = plugin.get_capabilities()
-        temp_config = ZeroShotModelConfig()
-        required_caps = temp_config.required_capabilities
-        missing_caps = check_capabilities(
-            required_caps,
-            provided_caps,
-            temp_config.name.NAME if temp_config.name else "zeroshot",
-            dbms_name
-        )
-
-        if missing_caps:
-            print("="*80)
-            print(f"⚠️  WARNING: DBMS '{dbms_name}' is missing capabilities required by ZeroShot: {missing_caps}")
-            print("    Training may fail or produce suboptimal results.")
-            print("="*80)
-        else:
-            print(f"✓ Capability check passed: {dbms_name} provides all required capabilities for ZeroShot.\n")
-    except Exception as e:
-        print(f"⚠️  Capability check could not be completed: {e}")
+    temp_config = ZeroShotModelConfig()
+    if not check_model_compatibility(temp_config, dbms_name):
+        print(f"⚠️  Compatibility check failed for {dbms_name}. Training may fail.")
     
     # Step 1: Load plans
     print("📂 Step 1: Loading plans")
@@ -789,8 +771,12 @@ def main():
                        help='Schema/database name')
     
     # Optional arguments
-    # Get available DBMS from registry
-    available_dbms = DBMSRegistry.get_cli_choices() if DBMSRegistry.list_plugins() else ['trino', 'postgres', 'mysql']
+    # Get available DBMS from registry (Dynamic Choices)
+    available_dbms = DBMSRegistry.get_cli_choices()
+    if not available_dbms:
+        # Fallback if no plugins registered (should not happen if initialized)
+        available_dbms = ['trino', 'postgres']
+        
     parser.add_argument('--dbms', type=str, default='trino',
                        choices=available_dbms,
                        help='DBMS name')

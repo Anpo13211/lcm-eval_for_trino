@@ -151,14 +151,17 @@ def qppnet_collator(plans, feature_statistics: dict = None, db_statistics: dict 
     errors = []
     for sample_idx, p in plans:
         try:
-            # Convert plan to OperatorTree using adapter if available
-            if adapter is not None:
-                # Use plugin-provided adapter (e.g., Trino)
-                plan_dict = adapter(p)
-                query_plan: OperatorTree = operator_tree_from_json(plan_dict)
-            else:
-                # No adapter needed (e.g., PostgreSQL)
-                query_plan: OperatorTree = operator_tree_from_json(vars(p))
+            # Convert plan to OperatorTree using adapter
+            if adapter is None:
+                raise ValueError(
+                    f"No plan adapter found for DBMS '{dbms_name}'. "
+                    f"Plugins must implement 'get_plan_adapter' to support QPPNet."
+                )
+            
+            # Use plugin-provided adapter (e.g., Trino adapter or vars for Postgres)
+            plan_dict = adapter(p)
+            query_plan: OperatorTree = operator_tree_from_json(plan_dict)
+
             
             # Debug: Print tree structure for first plan
             if sample_idx == 0 and use_trino and debug_print:

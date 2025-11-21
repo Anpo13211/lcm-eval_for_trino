@@ -92,7 +92,7 @@ class TrinoPlugin(DBMSPlugin):
         from models.qppnet.trino_adapter import adapt_trino_plan_to_qppnet
         return adapt_trino_plan_to_qppnet
     
-    def get_feature_aliases(self):
+    def get_feature_aliases(self) -> Dict[str, str]:
         """
         Returns feature aliases for Trino.
         """
@@ -116,7 +116,7 @@ class TrinoPlugin(DBMSPlugin):
             "aggregation": "aggregation",
         }
 
-    def get_metadata(self):
+    def get_metadata(self) -> Dict[str, Any]:
         """
         Returns plugin metadata.
         """
@@ -134,7 +134,7 @@ class TrinoPlugin(DBMSPlugin):
             }
         }
 
-    def get_capabilities(self):
+    def get_capabilities(self) -> Set[Capability]:
         """
         Returns Trino capabilities.
         """

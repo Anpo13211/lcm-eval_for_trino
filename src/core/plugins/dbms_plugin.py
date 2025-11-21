@@ -116,16 +116,18 @@ class DBMSPlugin(ABC):
         """
         return None
     
-    def get_feature_aliases(self) -> Optional[Dict[str, str]]:
+    @abstractmethod
+    def get_feature_aliases(self) -> Dict[str, str]:
         """
-        Returns feature name aliases for this DBMS (optional).
+        Returns feature name aliases for this DBMS.
         
         Maps DBMS-specific feature names to standardized names.
+        This is now mandatory to ensure O(M+N) scalability.
         
         Returns:
-            Dictionary mapping DBMS features to standard features, or None
+            Dictionary mapping logical feature names to DBMS-specific attribute names
         """
-        return None
+        pass
     
     def get_plan_adapter(self) -> Optional[Any]:
         """
@@ -183,6 +185,16 @@ class DBMSPlugin(ABC):
             self.get_statistics_converter()
             self.get_connection_factory()
             self.get_operator_normalizer()
+            
+            # Check mandatory metadata
+            if not isinstance(self.get_feature_aliases(), dict):
+                print(f"Plugin {self.name} validation failed: get_feature_aliases must return a dict")
+                return False
+                
+            if not self.get_capabilities():
+                print(f"Plugin {self.name} validation failed: get_capabilities must return a non-empty set")
+                return False
+                
             return True
         except NotImplementedError:
             return False
@@ -190,6 +202,7 @@ class DBMSPlugin(ABC):
             print(f"Plugin validation failed for {self.name}: {e}")
             return False
 
+    @abstractmethod
     def get_capabilities(self) -> Set[Capability]:
         """
         Returns the set of capabilities supported by this DBMS plugin.
@@ -197,7 +210,7 @@ class DBMSPlugin(ABC):
         Returns:
             Set of Capability enums
         """
-        return set()
+        pass
 
 
 # Forward declarations for type hints

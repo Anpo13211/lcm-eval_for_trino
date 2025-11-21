@@ -67,9 +67,12 @@ def unified_plan_collator(
             feature_statistics=feature_stats
         )
     """
-    # Infer DBMS name if not provided
+    # Enforce explicit DBMS name
     if dbms_name is None:
-        dbms_name = _infer_dbms_name(plans)
+        raise ValueError(
+            "dbms_name must be provided to unified_plan_collator. "
+            "Heuristic inference has been removed to ensure O(M+N) scalability."
+        )
     
     # Convert db_statistics to StandardizedStatistics if needed
     standardized_stats = _ensure_standardized_statistics(db_statistics, dbms_name)
@@ -187,35 +190,7 @@ def unified_plan_collator(
     return graph, features, labels, sample_idxs
 
 
-def _infer_dbms_name(plans: List[Any]) -> str:
-    """
-    Infer DBMS name from plan structure.
-    
-    Args:
-        plans: List of plans
-    
-    Returns:
-        DBMS name (e.g., "postgres", "trino")
-    """
-    if not plans:
-        return "postgres"  # Default
-    
-    # Get first plan
-    _, first_plan = plans[0] if isinstance(plans[0], tuple) else (0, plans[0])
-    
-    # Check for DBMS-specific attributes
-    if hasattr(first_plan, 'plan_parameters'):
-        params = first_plan.plan_parameters
-        
-        # Check for PostgreSQL-specific attributes
-        if hasattr(params, 'Node Type') or (isinstance(params, dict) and 'Node Type' in params):
-            return "postgres"
-        
-        # Check for Trino-specific attributes
-        if hasattr(params, 'op_name') or (isinstance(params, dict) and 'op_name' in params):
-            return "trino"
-    
-    return "postgres"  # Default
+
 
 
 def _ensure_standardized_statistics(

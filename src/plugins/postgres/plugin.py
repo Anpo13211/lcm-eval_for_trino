@@ -136,12 +136,12 @@ class PostgreSQLPlugin(DBMSPlugin):
         """
         Returns plan adapter for QPPNet/QueryFormer compatibility.
         
-        PostgreSQL plans are already in the expected format,
-        so we return None (no adaptation needed).
+        PostgreSQL plans are natively supported by QPPNet via vars(),
+        so we return the vars function as the adapter.
         """
-        return None  # No adaptation needed for PostgreSQL
+        return vars
     
-    def get_feature_aliases(self):
+    def get_feature_aliases(self) -> Dict[str, str]:
         """
         Returns feature aliases for PostgreSQL.
         """
@@ -161,13 +161,13 @@ class PostgreSQLPlugin(DBMSPlugin):
             "correlation": "correlation",
             "data_type": "data_type",
             "n_distinct": "n_distinct",
-            "null_frac": "null_frac",
+            "null_frac": "null_fraction",
             "row_count": "reltuples",
             "page_count": "relpages",
             "aggregation": "aggregation",
         }
 
-    def get_metadata(self):
+    def get_metadata(self) -> Dict[str, Any]:
         """
         Returns plugin metadata.
         """
@@ -184,7 +184,7 @@ class PostgreSQLPlugin(DBMSPlugin):
             }
         }
 
-    def get_capabilities(self):
+    def get_capabilities(self) -> Set[Capability]:
         """
         Returns PostgreSQL capabilities.
         """
